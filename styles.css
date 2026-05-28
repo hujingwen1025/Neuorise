@@ -464,6 +464,10 @@ textarea {
   transform: translateX(0);
 }
 
+.improve-button {
+  width: 150px;
+}
+
 input:focus,
 select:focus,
 textarea:focus {

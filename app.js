@@ -255,6 +255,14 @@ function setupSurveyPage() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitButton = form.querySelector('button[type="submit"]');
+    const originalText = submitButton?.textContent;
+
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Generating...";
+    }
+
     setMessage("#surveyMessage", "Generating and saving your session. Please wait ...", "neutral");
     const formData = collectForm(form);
     const intake = normalizeIntake(formData);
@@ -270,6 +278,10 @@ function setupSurveyPage() {
       });
       window.location.href = `/generation.html?session=${payload.session.id}`;
     } catch (error) {
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = originalText || "Generate and save session";
+      }
       setMessage("#surveyMessage", error.message, "error");
     }
   });
@@ -307,7 +319,7 @@ async function loadSession() {
   return payload.session;
 }
 
-function renderGeneration(session) {
+function renderGeneration(session, loadSessionTitle = false) {
   const track = getSelectedTrack(session);
   appState.track = track;
   appState.selectedTrackId = track?.id;
@@ -355,6 +367,7 @@ function getSelectedTrack(session) {
 function renderSessionTitle(session) {
   const title = session.title || session.tracks?.[0]?.title || "Untitled session";
   const input = $("#sessionTitleInput");
+  if (input === document.activeElement) return;
   if (input) input.value = title;
 }
 
@@ -594,18 +607,33 @@ async function setupFeedbackPage() {
 
   $("#feedbackForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = collectForm(event.currentTarget);
-    await submitFeedback({
-      rating: appState.selectedRating || "down",
-      feedbackText: form.feedbackText || "",
-      skipped: false,
-      redirectToFeedback: true,
-      captchaToken: form["cap-token"],
-    });
+    const form = event.currentTarget;
+    const submitButton = form.querySelector('button[type="submit"]');
+    const originalText = submitButton?.textContent;
+
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Generating...";
+    }
+
+    const formValues = collectForm(form);
+    try {
+      await submitFeedback({
+        rating: appState.selectedRating || "down",
+        feedbackText: formValues.feedbackText || "",
+        skipped: false,
+        redirectToFeedback: true,
+        captchaToken: formValues["cap-token"],
+        submitButton,
+        submitButtonText: originalText,
+      });
+    } catch (error) {
+      // Errors are handled inside submitFeedback.
+    }
   });
 }
 
-async function submitFeedback({ rating, feedbackText, skipped, redirectToFeedback, captchaToken }) {
+async function submitFeedback({ rating, feedbackText, skipped, redirectToFeedback, captchaToken, submitButton, submitButtonText }) {
   if (!appState.session || !appState.track) return;
   setMessage("#feedbackMessage", "Saving feedback and generating the next version. Please wait ...", "neutral");
   setMessage("#generationMessage", "Saving skip and generating a revised track. Please wait ...", "neutral");
@@ -627,10 +655,19 @@ async function submitFeedback({ rating, feedbackText, skipped, redirectToFeedbac
       window.location.href = `/generation.html?session=${appState.session.id}`;
     } else {
       renderGeneration(appState.session);
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = originalText || "Generate improved track";
+      }
     }
   } catch (error) {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalText || "Generate improved track";
+    }
     setMessage("#feedbackMessage", error.message, "error");
     setMessage("#generationMessage", error.message, "error");
+    throw error;
   }
 }
 
