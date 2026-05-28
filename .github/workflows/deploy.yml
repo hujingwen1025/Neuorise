@@ -33,6 +33,18 @@ jobs:
             echo === STARTING REQUIREMENTS INSTALLATION ===
             pip install -r requirements.txt
             echo === REQUIREMENTS INSTALLATION FINISHED ===
+            echo === WRITING API KEYS TO .env ===
+            touch .env
+            if grep -q '^GEMINI_APIKEY=' .env; then
+              sed -i 's|^GEMINI_APIKEY=.*|GEMINI_APIKEY=${{ secrets.GEMINI_APIKEY }}|' .env
+            else
+              echo "GEMINI_APIKEY=${{ secrets.GEMINI_APIKEY }}" >> .env
+            fi
+            if grep -q '^SUNO_APIKEY=' .env; then
+              sed -i 's|^SUNO_APIKEY=.*|SUNO_APIKEY=${{ secrets.SUNO_APIKEY }}|' .env
+            else
+              echo "SUNO_APIKEY=${{ secrets.SUNO_APIKEY }}" >> .env
+            fi
             echo === STARTING SYSTEMCTL RESTART ===
             sudo systemctl restart neuorise_server
             echo === SYSTEMCTL RESTART FINISHED ===
