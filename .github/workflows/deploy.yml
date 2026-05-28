@@ -1,0 +1,40 @@
+name: Deploy Exabyte Website App
+
+on:
+  push:
+    branches: [ main ]
+    
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo $(date)
+            echo *=== GIT SITE PUBLISH START ===*
+            cd /home/neuorisehost/Neuorise
+            echo === RESETTING LOCAL CHANGES ===
+            git reset --hard HEAD
+            echo === RESET LOCAL CHANGES FINISHED ===
+            echo === STARTING GIT PULL ===
+            git pull https://github.com/hujingwen1025/Neuorise.git main
+            echo === GIT PULL FINISHED ===
+            echo === STARTING VENV ACTIVATION ===
+            source venv/bin/activate
+            echo === VENV ACTIVATION FINISHED ===
+            echo === STARTING REQUIREMENTS INSTALLATION ===
+            pip install -r requirements.txt
+            echo === REQUIREMENTS INSTALLATION FINISHED ===
+            echo === STARTING SYSTEMCTL RESTART ===
+            sudo systemctl restart neuorise_server
+            echo === SYSTEMCTL RESTART FINISHED ===
+            echo *=== GIT SITE PUBLISH FINISHED ===*
+            echo $(date)
