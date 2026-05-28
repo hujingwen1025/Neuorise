@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Saved Sessions</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="sessions">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/survey.html">Survey</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+        <div class="auth-actions hidden"></div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="workspace">
+          <div class="section-heading">
+            <p class="eyebrow">Library</p>
+            <h1 class="page-title">Saved sessions</h1>
+            <p>
+              Review previous check-ins, prompts, generated track versions, and
+              feedback history.
+            </p>
+            <p class="form-message" id="sessionsMessage"></p>
+          </div>
+          <div class="sessions-list" id="sessionsList"></div>
+          <div class="hero-actions page-actions">
+            <a class="solid-button" href="/survey.html">Start a new survey</a>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

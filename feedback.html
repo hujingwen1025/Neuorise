@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Feedback</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="feedback">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/survey.html">Survey</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+        <div class="auth-actions hidden"></div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="workspace">
+          <div class="section-heading">
+            <p class="eyebrow">Step 4</p>
+            <h1 class="page-title">Track feedback</h1>
+            <p>
+              Your rating, skip behavior, and written notes are saved and used
+              to create the next track version for this session.
+            </p>
+          </div>
+
+          <article class="panel compact-panel">
+            <h3 id="feedbackTrackTitle">Loading track</h3>
+            <p id="feedbackTrackMeta">Loading saved session.</p>
+          </article>
+
+          <form class="feedback-panel" id="feedbackForm">
+            <div class="rating-row" role="group" aria-label="Track rating">
+              <button type="button" class="rating-button" data-rating="up" aria-label="Thumbs up">
+                <img src="./tu.png" alt="Thumbs up" height="28px" />
+              </button>
+              <button type="button" class="rating-button" data-rating="down" aria-label="Thumbs down">
+                <img src="./td.png" alt="Thumbs down" height="28px" />
+              </button>
+            </div>
+            <label>
+              What should change?
+              <textarea name="feedbackText" rows="4" placeholder="More grounding, less piano, slower tempo, softer highs..."></textarea>
+            </label>
+            <cap-widget
+                id="feedbackCaptcha"
+                required
+                data-cap-api-endpoint="/cap/"
+              ></cap-widget>
+            <div class="form-footer">
+              <button class="solid-button" type="submit">Generate improved track</button>
+              <a class="ghost-button" id="backToGeneration" href="/generation.html">Back to track</a>
+            </div>
+            <p class="form-message" id="feedbackMessage"></p>
+          </form>
+
+          <div class="history" id="historyList" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Profile</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="profile">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/survey.html">Survey</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+        <div class="auth-actions hidden"></div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="workspace">
+          <div class="section-heading">
+            <p class="eyebrow">Profile</p>
+            <h1 class="page-title">Update your account</h1>
+            <p>
+              Change your name, email, or password anytime. Your existing session
+              data remains saved to your account.
+            </p>
+          </div>
+
+          <form class="auth-card" id="profileForm">
+            <label>
+              Name
+              <input name="name" type="text" autocomplete="name" required />
+            </label>
+
+            <label>
+              Email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+
+            <label>
+              New password
+              <input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="Leave blank to keep current password" />
+            </label>
+
+            <button class="solid-button" type="submit">Save changes</button>
+            <p class="form-message" id="profileMessage"></p>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

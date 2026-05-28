@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Generation</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="generation">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/survey.html">Survey</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+        <div class="auth-actions hidden"></div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="workspace">
+          <div class="section-heading">
+            <p class="eyebrow">Steps 2 and 3</p>
+            <h1 class="page-title">Generated track</h1>
+            <p>
+              The server has saved the Gemini plan, Suno request, generation
+              status, and playable audio configuration for this session.
+            </p>
+            <i><p class="form-message" id="generationMessage"></p></i>
+          </div>
+
+          <!-- Gemini plan and Suno request removed from UI per user request -->
+
+          <article class="player-panel">
+            <div class="player-header">
+              <div>
+                <p class="eyebrow">Generated audio</p>
+                <h3 id="trackTitle">Loading track</h3>
+                <p id="trackSubtitle">Loading saved session data.</p>
+              </div>
+              <a class="solid-button" id="feedbackLink" href="/feedback.html">Improve track</a>
+            </div>
+            <div class="player-body">
+              <div class="player-iframe-shell">
+                <div class="player-placeholder" id="playerPlaceholder">
+                  <div class="player-placeholder-card">
+                    <p class="eyebrow">Generating track</p>
+                    <h3>Hold tight — your track is being created.</h3>
+                    <p>Once the audio finishes rendering, the player will appear here.</p>
+                  </div>
+                </div>
+                <iframe id="playerIframe" title="Embedded player" src="/player/index.html" aria-label="Embedded audio player" class="hidden"></iframe>
+              </div>
+            </div>
+          </article>
+
+          <article class="history-panel">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Improvement timeline</p>
+                <h2>Track versions</h2>
+                <p>Browse every saved generation and jump between versions to compare how your track evolved.</p>
+              </div>
+            </div>
+            <div class="history-list" id="versionTimeline">
+              <article class="history-item">
+                <strong>Loading versions…</strong>
+                <p>Previous versions will appear here once your session data is available.</p>
+              </article>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

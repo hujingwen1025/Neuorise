@@ -1,0 +1,1318 @@
+#!/usr/bin/env python3
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import sqlite3
+import ssl
+import threading
+from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
+from http.cookies import SimpleCookie
+from pathlib import Path
+from urllib.parse import urlencode, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from wsgiref.simple_server import make_server
+from capjs_server import CapServer
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+AUDIO_DIR = DATA_DIR / "audio"
+DB_PATH = DATA_DIR / "neuorise.sqlite3"
+SESSION_COOKIE = "neuorise_session"
+SESSION_DAYS = 14
+HTTP_TIMEOUT_SECONDS = 45
+MIN_POLL_INTERVAL_SECONDS = 5
+SUNO_BASE_URL = os.environ.get("SUNO_BASE_URL", "https://api.sunoapi.org/api/v1")
+GEMINI_BASE_URL = "https://api.openai-proxy.org/google"
+AUDIO_URL_PATH = "/audio"
+# Dummy callback URL: Suno API requires this parameter even though we use polling instead
+DUMMY_CALLBACK_URL = "https://example.com/suno-callback"
+
+MIME_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+}
+
+
+class ProviderError(Exception):
+    pass
+
+
+def provider_ssl_context():
+    cert_file = os.environ.get("SSL_CERT_FILE")
+    if cert_file:
+        return ssl.create_default_context(cafile=cert_file)
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+def load_dotenv():
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+load_dotenv()
+SUNO_BASE_URL = os.environ.get("SUNO_BASE_URL", SUNO_BASE_URL)
+
+CAPJS_SECRET_KEY = os.environ.get("CAPJS_SECRET_KEY") or secrets.token_urlsafe(32)
+CAPJS_CHALLENGE_COUNT = int(os.environ.get("CAPJS_CHALLENGE_COUNT", "24"))
+CAPJS_CHALLENGE_SIZE = int(os.environ.get("CAPJS_CHALLENGE_SIZE", "32"))
+CAPJS_CHALLENGE_DIFFICULTY = int(os.environ.get("CAPJS_CHALLENGE_DIFFICULTY", "5"))
+CAPJS_CHALLENGE_EXPIRY_MS = int(os.environ.get("CAPJS_CHALLENGE_EXPIRY_MS", "600000"))
+CAPJS_TOKEN_EXPIRY_MS = int(os.environ.get("CAPJS_TOKEN_EXPIRY_MS", "300000"))
+
+cap_server = CapServer(
+    secret_key=CAPJS_SECRET_KEY,
+    challenge_count=CAPJS_CHALLENGE_COUNT,
+    challenge_size=CAPJS_CHALLENGE_SIZE,
+    challenge_difficulty=CAPJS_CHALLENGE_DIFFICULTY,
+    challenge_expiry_ms=CAPJS_CHALLENGE_EXPIRY_MS,
+    token_expiry_ms=CAPJS_TOKEN_EXPIRY_MS,
+)
+
+MOOD_PROFILES = {
+    "Anxious": {"tempo": 58, "key": "D major", "arc": "down-regulate from alertness to safety"},
+    "Sad": {"tempo": 62, "key": "F major", "arc": "validate heaviness before opening toward warmth"},
+    "Overstimulated": {"tempo": 52, "key": "C major", "arc": "reduce sensory density and restore spaciousness"},
+    "Restless": {"tempo": 66, "key": "G major", "arc": "settle movement into steady focus"},
+    "Numb": {"tempo": 60, "key": "A minor to C major", "arc": "reintroduce gentle feeling without intensity"},
+    "Hopeful": {"tempo": 72, "key": "E major", "arc": "support optimism with grounded momentum"},
+    "Calm": {"tempo": 64, "key": "B-flat major", "arc": "maintain ease with soft attentional anchors"},
+}
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+def iso_now():
+    return utc_now().isoformat()
+
+
+def db():
+    DATA_DIR.mkdir(exist_ok=True)
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def init_db():
+    with db() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              email TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+              id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires_at TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS healing_sessions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              title TEXT NOT NULL,
+              intake_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tracks (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id INTEGER NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
+              version INTEGER NOT NULL,
+              title TEXT NOT NULL,
+              gemini_prompt TEXT NOT NULL,
+              suno_prompt TEXT NOT NULL,
+              suno_request_json TEXT NOT NULL,
+              provider_task_id TEXT,
+              provider_response_json TEXT,
+              audio_url TEXT,
+              audio_config_json TEXT NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS feedback (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id INTEGER NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
+              track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+              rating TEXT NOT NULL CHECK (rating IN ('up', 'down')),
+              feedback_text TEXT,
+              skipped INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON healing_sessions(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tracks_session ON tracks(session_id, version);
+            CREATE INDEX IF NOT EXISTS idx_feedback_session ON feedback(session_id, created_at DESC);
+            """
+        )
+        ensure_column(connection, "tracks", "provider_task_id", "TEXT")
+        ensure_column(connection, "tracks", "provider_response_json", "TEXT")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_tracks_provider_task ON tracks(provider_task_id)")
+
+
+def ensure_column(connection, table, column, definition):
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000)
+    return f"pbkdf2_sha256${salt}${digest.hex()}"
+
+
+def verify_password(password, stored):
+    try:
+        algorithm, salt, expected = stored.split("$", 2)
+    except ValueError:
+        return False
+    if algorithm != "pbkdf2_sha256":
+        return False
+    actual = hash_password(password, salt).split("$", 2)[2]
+    return hmac.compare_digest(actual, expected)
+
+
+def json_response(start_response, status, payload, headers=None):
+    body = json.dumps(payload).encode("utf-8")
+    response_headers = [
+        ("Content-Type", "application/json; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ]
+    if headers:
+        response_headers.extend(headers)
+    start_response(f"{status.value} {status.phrase}", response_headers)
+    return [body]
+
+
+def read_json(environ):
+    length = int(environ.get("CONTENT_LENGTH") or 0)
+    if length == 0:
+        return {}
+    raw = environ["wsgi.input"].read(length)
+    return json.loads(raw.decode("utf-8"))
+
+
+def get_captcha_token(environ, payload):
+    token = None
+    if isinstance(payload, dict):
+        token = (
+            payload.get("captchaVerificationToken")
+            or payload.get("captcha_token")
+            or payload.get("captchaToken")
+            or payload.get("cap-token")
+        )
+    if not token:
+        token = environ.get("HTTP_X_CAPTCHA_VERIFICATION_TOKEN")
+    return token
+
+
+def validate_captcha(environ, payload):
+    token = get_captcha_token(environ, payload)
+    if not token:
+        raise ValueError("Captcha verification token is required.")
+    if not cap_server.validate(token):
+        raise ValueError("Captcha verification failed.")
+
+
+def get_cookie(environ, name):
+    cookie = SimpleCookie(environ.get("HTTP_COOKIE", ""))
+    morsel = cookie.get(name)
+    return morsel.value if morsel else None
+
+
+def serialize_user(row):
+    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+
+
+def current_user(environ):
+    token = get_cookie(environ, SESSION_COOKIE)
+    if not token:
+        return None
+    with db() as connection:
+        row = connection.execute(
+            """
+            SELECT users.* FROM auth_sessions
+            JOIN users ON users.id = auth_sessions.user_id
+            WHERE auth_sessions.id = ? AND auth_sessions.expires_at > ?
+            """,
+            (token, iso_now()),
+        ).fetchone()
+    return row
+
+
+def require_user(environ):
+    user = current_user(environ)
+    if not user:
+        raise PermissionError("Please sign in to continue.")
+    return user
+
+
+def create_session_cookie(user_id):
+    token = secrets.token_urlsafe(32)
+    expires_at = utc_now() + timedelta(days=SESSION_DAYS)
+    with db() as connection:
+        connection.execute(
+            "INSERT INTO auth_sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, expires_at.isoformat(), iso_now()),
+        )
+    return (
+        "Set-Cookie",
+        f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_DAYS * 24 * 60 * 60}",
+    )
+
+
+def clear_session_cookie(environ):
+    token = get_cookie(environ, SESSION_COOKIE)
+    if token:
+        with db() as connection:
+            connection.execute("DELETE FROM auth_sessions WHERE id = ?", (token,))
+    return ("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+
+
+def infer_physiology(intake):
+    heart_rate = int(intake["heartRate"])
+    breath_rate = int(intake["breathRate"])
+    stress = int(intake["stress"])
+    energy = int(intake["energy"])
+    heart_state = "elevated heart rate" if heart_rate > 92 else "low heart rate" if heart_rate < 58 else "steady heart rate"
+    breath_state = "quick breathing" if breath_rate > 18 else "slow breathing" if breath_rate < 10 else "balanced breathing"
+    if stress >= 7 or heart_rate > 92 or breath_rate > 18:
+        regulation_goal = "parasympathetic downshift"
+    elif energy <= 3:
+        regulation_goal = "gentle activation"
+    else:
+        regulation_goal = "stable emotional regulation"
+    return {
+        "heart_state": heart_state,
+        "breath_state": breath_state,
+        "regulation_goal": regulation_goal,
+    }
+
+
+def build_gemini_prompt(intake, feedback=None):
+    profile = MOOD_PROFILES.get(intake["mood"], MOOD_PROFILES["Calm"])
+    physiology = infer_physiology(intake)
+    symptom_ratings = intake.get("symptomRatings") or {}
+    rating_labels = [
+        ("sadness", "Feelings of sadness"),
+        ("noInterest", "Feeling no interest or pleasure in things"),
+        ("deathThoughts", "Recurrent thoughts of death or suicide"),
+        ("hopelessness", "Hopelessness about the future"),
+        ("anxious", "Feeling anxious or fearful"),
+        ("excessiveWorry", "Excessive worry about several different things"),
+        ("panicAttacks", "Sudden attacks of panic with palpitations, shortness of breath, faintness or other frightening bodily sensations"),
+        ("fatigue", "Fatigue or loss of energy"),
+        ("concentration", "Diminished ability to think or concentrate"),
+        ("difficultySleeping", "Difficulty falling asleep"),
+        ("disturbedSleep", "Restless or disturbed sleep"),
+        ("irritable", "Feeling easily irritated or annoyed"),
+    ]
+    symptom_lines = "\n".join(
+        f"- {label}: {symptom_ratings.get(key, 'n/a')}/5"
+        for key, label in rating_labels
+    )
+    feedback_line = (
+        f'User feedback to adapt from previous track: rating={feedback["rating"]}; notes="{feedback.get("feedbackText") or "no written notes"}".'
+        if feedback
+        else "No previous feedback. Create the first therapeutic direction."
+    )
+    return f"""You are a music therapy prompt engineer for a wellness product.
+
+Create a Suno-compatible music generation prompt using the user's current state.
+
+User state:
+- Mood: {intake["mood"]}
+- Energy: {intake["energy"]}/10
+- Stress: {intake["stress"]}/10
+- Mental need: {intake["need"]}
+- Preferred texture: {intake["texture"]}
+- Sounds to avoid: {intake.get("avoid") or "none specified"}
+- User instructions: {intake.get("instructions") or "none specified"}
+- Mental symptom ratings:
+{symptom_lines}
+- Heart rate: {intake["heartRate"]} bpm ({physiology["heart_state"]})
+- Respiratory rate: {intake["breathRate"]} breaths/min ({physiology["breath_state"]})
+- Session target: {intake["duration"]} minutes
+- Regulation goal: {physiology["regulation_goal"]}
+- Emotional arc: {profile["arc"]}
+
+{feedback_line}
+
+Return:
+1. A concise Suno prompt.
+2. Tempo, key, arrangement, instrumentation, mix notes, and negative prompt.
+3. A short therapeutic intention sentence.
+
+Safety: keep language wellness-focused and avoid medical claims."""
+
+
+def http_json(method, url, headers=None, payload=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = Request(url, data=data, method=method)
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    request.add_header("Accept", "application/json")
+    request.add_header("User-Agent", "Neuorise/1.0")
+    try:
+        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS, context=provider_ssl_context()) as response:
+            body = response.read().decode("utf-8")
+            print('Body received from provider:')
+            print(body)
+            return json.loads(body) if body else {}
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        detail = body[:1000] if body else error.reason
+        raise ProviderError(f"Provider HTTP {error.code}: {detail}") from error
+    except URLError as error:
+        raise ProviderError(f"Provider network error: {error.reason}") from error
+    except Exception as error:
+        raise ProviderError(f"Provider request failed: {error}") from error
+
+
+def bearer_token(value):
+    token = (value or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token.split(None, 1)[1].strip()
+    return f"Bearer {token}"
+
+
+def suno_callback_url():
+    """Return callback URL for Suno API.
+    
+    Note: Even though we use polling instead of relying on callbacks,
+    the Suno API requires this parameter in the request. We provide a
+    dummy URL since we fetch task status via polling instead.
+    """
+    explicit = os.environ.get("SUNO_CALLBACK_URL")
+    if explicit:
+        return explicit.strip()
+    return DUMMY_CALLBACK_URL
+
+
+def extract_json_object(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
+
+
+def fallback_gemini_plan(intake, feedback=None):
+    profile = MOOD_PROFILES.get(intake["mood"], MOOD_PROFILES["Calm"])
+    physiology = infer_physiology(intake)
+    stress = int(intake["stress"])
+    breath_rate = int(intake["breathRate"])
+    stress_offset = -6 if stress >= 8 else 4 if stress <= 3 else 0
+    breath_offset = -5 if breath_rate > 18 else 3 if breath_rate < 10 else 0
+    feedback_offset = -4 if feedback and feedback["rating"] == "down" else 2 if feedback and feedback["rating"] == "up" else 0
+    tempo = max(46, min(78, profile["tempo"] + stress_offset + breath_offset + feedback_offset))
+    density = "minimal, spacious, low-density" if stress >= 7 or intake["mood"] == "Overstimulated" else "softly layered"
+    percussion = "muted heartbeat-like pulse below the mix" if intake["need"] == "Focus" else "no drums, only breath-like swells"
+    adaptation = (
+        f'Adaptation from feedback: {"reduce intensity and simplify the arrangement" if feedback["rating"] == "down" else "preserve the helpful mood and add subtle variation"}; user notes: {feedback.get("feedbackText") or "none"}.'
+        if feedback
+        else "Initial generation based on intake."
+    )
+    instructions = intake.get("instructions") or ""
+    instruction_line = f'User instruction: {instructions}.' if instructions else ""
+    symptom_ratings = intake.get("symptomRatings") or {}
+    symptom_labels = [
+        ("sadness", "Feelings of sadness"),
+        ("noInterest", "Feeling no interest or pleasure in things"),
+        ("deathThoughts", "Recurrent thoughts of death or suicide"),
+        ("hopelessness", "Hopelessness about the future"),
+        ("anxious", "Feeling anxious or fearful"),
+        ("excessiveWorry", "Excessive worry about several different things"),
+        ("panicAttacks", "Sudden attacks of panic with palpitations, shortness of breath, faintness or other frightening bodily sensations"),
+        ("fatigue", "Fatigue or loss of energy"),
+        ("concentration", "Diminished ability to think or concentrate"),
+        ("difficultySleeping", "Difficulty falling asleep"),
+        ("disturbedSleep", "Restless or disturbed sleep"),
+        ("irritable", "Feeling easily irritated or annoyed"),
+    ]
+    symptom_lines = "\n".join(
+        f"- {label}: {symptom_ratings.get(key, 'n/a')}/5"
+        for key, label in symptom_labels
+    )
+    prompt = f"""Therapeutic instrumental ambient music for {intake["need"].lower()} while the listener feels {intake["mood"].lower()}.
+Mood arc: {profile["arc"]}.
+Tempo: {tempo} BPM. Key: {profile["key"]}. Length target: {intake["duration"]} minutes.
+{instruction_line}
+Mental symptom ratings:
+{symptom_lines}
+Arrangement: slow opening pad, gentle motif after 30 seconds, warm harmonic bed, gradual soft resolution.
+Instrumentation: {intake["texture"]}, sub-bass warmth, distant organic room tone, {percussion}.
+Mix: soft transients, no sudden drops, wide stereo, low high-frequency glare, volume-safe mastering.
+Therapeutic intention: Support {physiology["regulation_goal"]}. {adaptation}"""
+    style = f"therapeutic ambient, {density}, {intake['texture'].lower()}, {profile['key']}, {tempo} BPM"
+    negative_tags = intake.get("avoid") or "harsh leads, aggressive drums, sudden risers, distorted vocals, alarm-like tones"
+    return {
+        "title": f'{intake["need"]} for {intake["mood"]}',
+        "prompt": prompt,
+        "style": style,
+        "negativeTags": negative_tags,
+        "instrumental": True,
+        "model": os.environ.get("SUNO_MODEL", "V4_5ALL"),
+        "therapeuticIntention": f'Support {physiology["regulation_goal"]} while helping the listener move through "{profile["arc"]}".',
+        "raw": json.dumps(
+            {
+                "title": f'{intake["need"]} for {intake["mood"]}',
+                "prompt": prompt,
+                "style": style,
+                "negativeTags": negative_tags,
+                "therapeuticIntention": f'Support {physiology["regulation_goal"]} while helping the listener move through "{profile["arc"]}".',
+            },
+            indent=2,
+        ),
+    }
+
+
+def call_gemini_api(intake, feedback=None):
+    api_key = os.environ.get("GEMINI_APIKEY")
+    if not api_key:
+        raise ProviderError("GEMINI_APIKEY is missing from the server environment.")
+
+    user_prompt = build_gemini_prompt(intake, feedback)
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                    "You generate production-ready music generation parameters. "
+                    "Return only valid JSON with keys: title, prompt, style, negativeTags, "
+                    "instrumental, model, therapeuticIntention. The prompt must be suitable "
+                            "for Suno instrumental therapeutic music and must avoid medical claims.\n\n"
+                            f"{user_prompt}"
+                        )
+                    }
+                ],
+            },
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 1400,
+            "responseMimeType": "application/json",
+        },
+    }
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    result = http_json(
+        "POST",
+        f"{GEMINI_BASE_URL}/v1beta/models/{model}:generateContent?{urlencode({'key': api_key})}",
+        {
+            "Content-Type": "application/json",
+        },
+        payload,
+    )
+    try:
+        parts = result["candidates"][0]["content"]["parts"]
+        content = "".join(part.get("text", "") for part in parts)
+    except (KeyError, IndexError, TypeError) as error:
+        raise ProviderError("Gemini response did not include generated content.") from error
+
+    try:
+        plan = extract_json_object(content)
+    except json.JSONDecodeError:
+        plan = fallback_gemini_plan(intake, feedback)
+        plan["raw"] = content
+        return plan
+
+    fallback = fallback_gemini_plan(intake, feedback)
+    return {
+        "title": str(plan.get("title") or fallback["title"])[:100],
+        "prompt": str(plan.get("prompt") or fallback["prompt"])[:5000],
+        "style": str(plan.get("style") or fallback["style"])[:1000],
+        "negativeTags": str(plan.get("negativeTags") or fallback["negativeTags"])[:1000],
+        "instrumental": bool(plan.get("instrumental", True)),
+        "model": str(plan.get("model") or os.environ.get("SUNO_MODEL", "V4_5ALL")),
+        "therapeuticIntention": str(plan.get("therapeuticIntention") or fallback["therapeuticIntention"]),
+        "raw": json.dumps(plan, indent=2, ensure_ascii=False),
+    }
+
+
+def suno_prompt_summary(plan):
+    return f"""Title: {plan["title"]}
+Style: {plan["style"]}
+Instrumental: {"yes" if plan.get("instrumental", True) else "no"}
+Model: {plan.get("model") or os.environ.get("SUNO_MODEL", "V4_5ALL")}
+Prompt:
+{plan["prompt"]}
+
+Negative prompt:
+{plan["negativeTags"]}
+
+Therapeutic intention:
+{plan["therapeuticIntention"]}"""
+
+
+def audio_config_from_plan(intake, plan, feedback=None):
+    profile = MOOD_PROFILES.get(intake["mood"], MOOD_PROFILES["Calm"])
+    stress = int(intake["stress"])
+    tempo = profile["tempo"]
+    for token in (plan.get("style", "") + " " + plan.get("prompt", "")).replace(",", " ").split():
+        if token.isdigit():
+            number = int(token)
+            if 40 <= number <= 100:
+                tempo = number
+                break
+    return {
+        "tempo": max(46, min(78, tempo)),
+        "intensity": max(0.15, min(0.8, (11 - stress) / 12)),
+        "warmth": 0.74 if feedback and feedback["rating"] == "down" else 0.9,
+        "root": 220 if "minor" in profile["key"] else 246.94,
+    }
+
+
+def call_suno_api(plan):
+    api_key = os.environ.get("SUNO_APIKEY")
+    if not api_key:
+        raise ProviderError("SUNO_APIKEY is missing from the server environment.")
+
+    request_payload = {
+        "customMode": True,
+        "instrumental": bool(plan.get("instrumental", True)),
+        "model": plan.get("model") or os.environ.get("SUNO_MODEL", "V4_5ALL"),
+        "callBackUrl": suno_callback_url(),
+        "prompt": plan["prompt"][:5000],
+        "style": plan["style"][:1000],
+        "title": plan["title"][:80],
+        "negativeTags": plan["negativeTags"][:1000],
+    }
+    result = http_json(
+        "POST",
+        f"{SUNO_BASE_URL}/generate",
+        {
+            "Authorization": bearer_token(api_key),
+            "Content-Type": "application/json",
+        },
+        request_payload,
+    )
+    if result.get("code") != 200:
+        raise ProviderError(f"Suno generation failed: {result.get('msg') or result}")
+    task_id = (result.get("data") or {}).get("taskId")
+    if not task_id:
+        raise ProviderError("Suno generation did not return a taskId.")
+    return {
+        "task_id": task_id,
+        "request": request_payload,
+        "response": result,
+        "status": "PENDING",
+    }
+
+
+def extract_suno_audio(data):
+    if data is None:
+        return None
+    if isinstance(data, list):
+        candidates = data
+    else:
+        response = data.get("response") or {}
+        candidates = response.get("sunoData") or response.get("data") or data.get("sunoData") or data.get("data") or []
+    if not candidates:
+        return None
+    first = candidates[0]
+    return {
+        "audio_url": first.get("audioUrl") or first.get("audio_url") or first.get("streamAudioUrl") or first.get("stream_audio_url"),
+        "stream_audio_url": first.get("streamAudioUrl") or first.get("stream_audio_url"),
+        "title": first.get("title"),
+        "duration": first.get("duration"),
+        "raw": first,
+    }
+
+
+def is_suno_terminal_status(status):
+    return str(status or "").strip().upper() in {
+        "COMPLETED",
+        "COMPLETE",
+        "SUCCESS",
+        "SUCCEEDED",
+        "DONE",
+        "FINISHED",
+        "FINISH",
+    }
+
+
+def download_audio_file(audio_url, task_id, track_id):
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    parsed = urlparse(audio_url)
+    ext = Path(parsed.path).suffix.lower() or ".mp3"
+    if ext not in {".mp3", ".wav", ".ogg", ".m4a", ".flac"}:
+        ext = ".mp3"
+    safe_task_id = re.sub(r"[^0-9A-Za-z_-]", "_", str(task_id) or "audio")
+    filename = f"track_{track_id}_{safe_task_id}{ext}"
+    local_path = AUDIO_DIR / filename
+    if local_path.exists():
+        return local_path
+
+    request = Request(audio_url, method="GET")
+    request.add_header("User-Agent", "Neuorise/1.0")
+    try:
+        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS, context=provider_ssl_context()) as response:
+            local_path.write_bytes(response.read())
+    except HTTPError as error:
+        raise ProviderError(f"Audio download failed: {error.code} {error.reason}") from error
+    except URLError as error:
+        raise ProviderError(f"Audio download failed: {error.reason}") from error
+    except Exception as error:
+        raise ProviderError(f"Audio download failed: {error}") from error
+
+    return local_path
+
+
+def poll_suno_task(task_id):
+    api_key = os.environ.get("SUNO_APIKEY")
+    if not api_key:
+        raise ProviderError("SUNO_APIKEY is missing from the server environment.")
+    query = urlencode({"taskId": task_id})
+    result = http_json(
+        "GET",
+        f"{SUNO_BASE_URL}/generate/record-info?{query}",
+        {"Authorization": bearer_token(api_key)},
+    )
+    if result.get("code") != 200:
+        raise ProviderError(f"Suno status check failed: {result.get('msg') or result}")
+    data = result.get("data") or result
+    audio = extract_suno_audio(data) or {}
+    return {
+        "status": (data.get("status") or data.get("state") or "PENDING").upper(),
+        "audio_url": audio.get("audio_url"),
+        "title": audio.get("title"),
+        "provider_response": result,
+    }
+
+
+def suno_update_from_payload(payload):
+    data = payload.get("data") or payload
+    task_id = data.get("taskId") or data.get("task_id") or payload.get("taskId")
+    status = data.get("status") or payload.get("status") or "PENDING"
+    audio = extract_suno_audio(data) or extract_suno_audio({"response": data}) or {}
+    return {
+        "task_id": task_id,
+        "status": status,
+        "audio_url": audio.get("audio_url"),
+        "title": audio.get("title"),
+        "provider_response": payload,
+    }
+
+
+def persist_suno_update(connection, update):
+    if not update.get("task_id"):
+        return None
+    track = connection.execute(
+        """
+        SELECT tracks.*, healing_sessions.user_id
+        FROM tracks
+        JOIN healing_sessions ON healing_sessions.id = tracks.session_id
+        WHERE tracks.provider_task_id = ?
+        """,
+        (update["task_id"],),
+    ).fetchone()
+    if not track:
+        return None
+
+    # Persist the provider status and response immediately and avoid
+    # performing potentially long-running audio downloads on the
+    # request-handling thread. If we received an audio URL from Suno,
+    # store the remote URL now and schedule a background downloader to
+    # fetch and save a local copy. This prevents the WSGI server from
+    # blocking other requests while downloads complete.
+    audio_url = update.get("audio_url")
+    local_audio_url = track["audio_url"]
+
+    # If we already have a local copy, keep it. Otherwise, if the
+    # provider returned an audio URL, store the remote URL and schedule
+    # a background download (the downloader will update the DB when
+    # finished).
+    if local_audio_url and local_audio_url.startswith(AUDIO_URL_PATH):
+        # Already have local copy; just update provider response/status
+        connection.execute(
+            """
+            UPDATE tracks
+            SET status = ?, title = COALESCE(?, title), provider_response_json = ?
+            WHERE id = ?
+            """,
+            (update["status"], update.get("title"), json.dumps(update["provider_response"]), track["id"]),
+        )
+    elif audio_url:
+        # Write the remote audio URL into the DB so clients can see it
+        # immediately and then fetch a local copy in background.
+        connection.execute(
+            """
+            UPDATE tracks
+            SET status = ?, audio_url = COALESCE(?, audio_url), title = COALESCE(?, title), provider_response_json = ?
+            WHERE id = ?
+            """,
+            (update["status"], audio_url, update.get("title"), json.dumps(update["provider_response"]), track["id"]),
+        )
+
+        # Schedule background download if the URL is external (not a local /audio/ path).
+        if not str(audio_url).startswith(AUDIO_URL_PATH):
+            # Start a daemon thread to download and save the audio file.
+            threading.Thread(
+                target=_background_download_and_persist,
+                args=(track["id"], update["task_id"], audio_url),
+                daemon=True,
+            ).start()
+    else:
+        # No audio URL available; just update provider fields.
+        connection.execute(
+            """
+            UPDATE tracks
+            SET status = ?, title = COALESCE(?, title), provider_response_json = ?
+            WHERE id = ?
+            """,
+            (update["status"], update.get("title"), json.dumps(update["provider_response"]), track["id"]),
+        )
+
+    connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), track["session_id"]))
+    return track
+
+
+def _background_download_and_persist(track_id, task_id, audio_url):
+    """Download the audio in a background thread and update the DB.
+
+    This function uses its own sqlite connection (via `db()`) so it does
+    not block the main request-handling thread.
+    """
+    try:
+        local_path = download_audio_file(audio_url, task_id, track_id)
+        local_audio_url = f"{AUDIO_URL_PATH}/{local_path.name}"
+    except ProviderError:
+        # If download fails, keep the remote URL so the client can still
+        # stream directly from the provider.
+        local_audio_url = audio_url
+
+    try:
+        with db() as connection:
+            # Update the track to point to the local copy (or the remote
+            # URL on failure). Preserve the provider status; set a simple
+            # finalized status if a local copy exists.
+            new_status = "COMPLETED" if str(local_audio_url).startswith(AUDIO_URL_PATH) else "AVAILABLE"
+            connection.execute(
+                """
+                UPDATE tracks
+                SET audio_url = ?, status = ?, provider_response_json = COALESCE(provider_response_json, ?)
+                WHERE id = ?
+                """,
+                (local_audio_url, new_status, json.dumps({}), track_id),
+            )
+            # Touch session updated_at
+            row = connection.execute("SELECT session_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+            if row:
+                connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), row["session_id"]))
+    except Exception:
+        # Swallow any DB errors in the background thread to avoid crashing.
+        pass
+
+
+def validate_intake(intake):
+    required = ["mood", "energy", "stress", "need", "texture", "heartRate", "breathRate", "duration"]
+    missing = [field for field in required if field not in intake or intake[field] in ("", None)]
+    if missing:
+        raise ValueError(f"Missing fields: {', '.join(missing)}")
+    for field, low, high in [("energy", 1, 10), ("stress", 1, 10), ("heartRate", 40, 180), ("breathRate", 4, 40), ("duration", 2, 30)]:
+        value = int(intake[field])
+        if value < low or value > high:
+            raise ValueError(f"{field} must be between {low} and {high}.")
+
+
+def create_track(connection, session_id, version, intake, feedback=None):
+    plan = call_gemini_api(intake, feedback)
+    suno = call_suno_api(plan)
+    suno_prompt = suno_prompt_summary(plan)
+    audio_config = audio_config_from_plan(intake, plan, feedback)
+    created_at = iso_now()
+    cursor = connection.execute(
+        """
+        INSERT INTO tracks (
+          session_id, version, title, gemini_prompt, suno_prompt,
+          suno_request_json, provider_task_id, provider_response_json,
+          audio_url, audio_config_json, status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            version,
+            plan["title"],
+            plan["raw"],
+            suno_prompt,
+            json.dumps(suno["request"]),
+            suno["task_id"],
+            json.dumps(suno["response"]),
+            None,
+            json.dumps(audio_config),
+            suno["status"],
+            created_at,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def session_payload(connection, session_id, user_id):
+    session = connection.execute(
+        "SELECT * FROM healing_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    ).fetchone()
+    if not session:
+        return None
+    tracks = connection.execute(
+        "SELECT * FROM tracks WHERE session_id = ? ORDER BY version ASC",
+        (session_id,),
+    ).fetchall()
+    feedback = connection.execute(
+        "SELECT * FROM feedback WHERE session_id = ? ORDER BY created_at DESC",
+        (session_id,),
+    ).fetchall()
+    return {
+        "id": session["id"],
+        "title": session["title"],
+        "intake": json.loads(session["intake_json"]),
+        "created_at": session["created_at"],
+        "updated_at": session["updated_at"],
+        "tracks": [
+            {
+                "id": track["id"],
+                "version": track["version"],
+                "title": track["title"],
+                "gemini_prompt": track["gemini_prompt"],
+                "suno_prompt": track["suno_prompt"],
+                "suno_request": json.loads(track["suno_request_json"]),
+                "provider_task_id": track["provider_task_id"],
+                "provider_response": json.loads(track["provider_response_json"]) if track["provider_response_json"] else None,
+                "audio_url": track["audio_url"],
+                "audio_config": json.loads(track["audio_config_json"]),
+                "status": track["status"],
+                "created_at": track["created_at"],
+            }
+            for track in tracks
+        ],
+        "feedback": [
+            {
+                "id": item["id"],
+                "track_id": item["track_id"],
+                "rating": item["rating"],
+                "feedback_text": item["feedback_text"],
+                "skipped": bool(item["skipped"]),
+                "created_at": item["created_at"],
+            }
+            for item in feedback
+        ],
+    }
+
+
+def handle_api(environ, start_response, path, method):
+    try:
+        if path == "/api/captcha/challenge" and method == "GET":
+            challenge = cap_server.create_challenge()
+            return json_response(start_response, HTTPStatus.OK, {"captcha": challenge})
+
+        if path == "/api/signup" and method == "POST":
+            payload = read_json(environ)
+            validate_captcha(environ, payload)
+            name = (payload.get("name") or "").strip()
+            email = (payload.get("email") or "").strip().lower()
+            password = payload.get("password") or ""
+            if not name or not email or len(password) < 8:
+                raise ValueError("Name, email, and an 8+ character password are required.")
+            with db() as connection:
+                try:
+                    cursor = connection.execute(
+                        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                        (name, email, hash_password(password), iso_now()),
+                    )
+                except sqlite3.IntegrityError:
+                    raise ValueError("An account with that email already exists.")
+                user = connection.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            return json_response(start_response, HTTPStatus.CREATED, {"user": serialize_user(user)}, [create_session_cookie(user["id"])])
+
+        if path == "/api/login" and method == "POST":
+            payload = read_json(environ)
+            validate_captcha(environ, payload)
+            email = (payload.get("email") or "").strip().lower()
+            password = payload.get("password") or ""
+            with db() as connection:
+                user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+            if not user or not verify_password(password, user["password_hash"]):
+                raise ValueError("Invalid email or password.")
+            return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(user)}, [create_session_cookie(user["id"])])
+
+        if path == "/api/logout" and method == "POST":
+            return json_response(start_response, HTTPStatus.OK, {"ok": True}, [clear_session_cookie(environ)])
+
+        if path == "/api/me" and method == "GET":
+            user = require_user(environ)
+            return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(user)})
+
+        if path == "/api/me" and method == "PATCH":
+            user = require_user(environ)
+            payload = read_json(environ)
+            updates = {}
+            name = payload.get("name")
+            if name is not None:
+                name = name.strip()
+                if not name:
+                    raise ValueError("Name cannot be empty.")
+                updates["name"] = name
+            email = payload.get("email")
+            if email is not None:
+                email = email.strip().lower()
+                if not email:
+                    raise ValueError("Email cannot be empty.")
+                updates["email"] = email
+            password = payload.get("password")
+            if password:
+                if len(password) < 8:
+                    raise ValueError("Password must be at least 8 characters.")
+                updates["password_hash"] = hash_password(password)
+            if not updates:
+                raise ValueError("No profile changes were submitted.")
+            with db() as connection:
+                if "email" in updates:
+                    existing = connection.execute(
+                        "SELECT id FROM users WHERE email = ? AND id != ?",
+                        (updates["email"], user["id"]),
+                    ).fetchone()
+                    if existing:
+                        raise ValueError("An account with that email already exists.")
+                set_clause = ", ".join(f"{key} = ?" for key in updates)
+                params = list(updates.values()) + [user["id"]]
+                connection.execute(f"UPDATE users SET {set_clause} WHERE id = ?", params)
+                updated = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+            return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(updated)})
+
+        # Callback endpoint removed: now using polling via /api/tracks/{id}/refresh
+        if path == "/api/suno/callback" and method == "POST":
+            # Deprecated: Suno API now uses polling instead of callbacks.
+            # This endpoint is kept for backward compatibility but is no longer used.
+            return json_response(start_response, HTTPStatus.GONE, {"error": "Callback-based updates are deprecated. Use polling via /api/tracks/{id}/refresh instead."})
+
+        if path.startswith("/api/tracks/") and method == "GET":
+            user = require_user(environ)
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "tracks" and parts[3] == "refresh":
+                track_id = int(parts[2])
+                with db() as connection:
+                    track = connection.execute(
+                        """
+                        SELECT tracks.*, healing_sessions.user_id, healing_sessions.updated_at as session_updated_at
+                        FROM tracks
+                        JOIN healing_sessions ON healing_sessions.id = tracks.session_id
+                        WHERE tracks.id = ? AND healing_sessions.user_id = ?
+                        """,
+                        (track_id, user["id"]),
+                    ).fetchone()
+                    if not track:
+                        return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Track not found."})
+                    needs_refresh = track["provider_task_id"] and (
+                        not track["audio_url"] or not str(track["audio_url"]).startswith(AUDIO_URL_PATH)
+                    )
+                    if needs_refresh:
+                        last_poll_time = datetime.fromisoformat(track["session_updated_at"])
+                        time_since_last_poll = utc_now() - last_poll_time
+                        if time_since_last_poll.total_seconds() >= MIN_POLL_INTERVAL_SECONDS:
+                            update = poll_suno_task(track["provider_task_id"])
+                            update["task_id"] = track["provider_task_id"]
+                            persist_suno_update(connection, update)
+                    session = session_payload(connection, track["session_id"], user["id"])
+                return json_response(start_response, HTTPStatus.OK, {"session": session})
+
+        if path == "/api/sessions" and method == "GET":
+            user = require_user(environ)
+            with db() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT healing_sessions.*, COUNT(tracks.id) AS track_count
+                    FROM healing_sessions
+                    LEFT JOIN tracks ON tracks.session_id = healing_sessions.id
+                    WHERE healing_sessions.user_id = ?
+                    GROUP BY healing_sessions.id
+                    ORDER BY healing_sessions.updated_at DESC
+                    """,
+                    (user["id"],),
+                ).fetchall()
+            sessions = []
+            for row in rows:
+                intake = json.loads(row["intake_json"])
+                sessions.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "mood": intake["mood"],
+                        "need": intake["need"],
+                        "track_count": row["track_count"],
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
+            return json_response(start_response, HTTPStatus.OK, {"sessions": sessions})
+
+        if path == "/api/sessions" and method == "POST":
+            user = require_user(environ)
+            payload = read_json(environ)
+            validate_captcha(environ, payload)
+            intake = payload.get("intake") or {}
+            validate_intake(intake)
+            now = iso_now()
+            title = f'{intake["need"]} for {intake["mood"]}'
+            with db() as connection:
+                cursor = connection.execute(
+                    "INSERT INTO healing_sessions (user_id, title, intake_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (user["id"], title, json.dumps(intake), now, now),
+                )
+                session_id = cursor.lastrowid
+                create_track(connection, session_id, 1, intake)
+                session = session_payload(connection, session_id, user["id"])
+            return json_response(start_response, HTTPStatus.CREATED, {"session": session})
+
+        if path.startswith("/api/sessions/"):
+            user = require_user(environ)
+            parts = path.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "sessions":
+                session_id = int(parts[2])
+                if len(parts) == 3 and method == "GET":
+                    with db() as connection:
+                        session = session_payload(connection, session_id, user["id"])
+                    if not session:
+                        return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Session not found."})
+                    return json_response(start_response, HTTPStatus.OK, {"session": session})
+                if len(parts) == 3 and method == "DELETE":
+                    with db() as connection:
+                        session = session_payload(connection, session_id, user["id"])
+                        if not session:
+                            return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Session not found."})
+                        connection.execute("DELETE FROM healing_sessions WHERE id = ?", (session_id,))
+                    return json_response(start_response, HTTPStatus.OK, {"message": "Session deleted successfully."})
+                if len(parts) == 4 and parts[3] == "feedback" and method == "POST":
+                    payload = read_json(environ)
+                    validate_captcha(environ, payload)
+                    rating = payload.get("rating")
+                    if rating not in ("up", "down"):
+                        raise ValueError("Rating must be up or down.")
+                    feedback_data = {
+                        "rating": rating,
+                        "feedbackText": payload.get("feedbackText") or "",
+                    }
+                    with db() as connection:
+                        session = session_payload(connection, session_id, user["id"])
+                        if not session:
+                            return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Session not found."})
+                        track_id = int(payload.get("trackId") or session["tracks"][-1]["id"])
+                        connection.execute(
+                            """
+                            INSERT INTO feedback (session_id, track_id, rating, feedback_text, skipped, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (session_id, track_id, rating, feedback_data["feedbackText"], 1 if payload.get("skipped") else 0, iso_now()),
+                        )
+                        next_version = len(session["tracks"]) + 1
+                        create_track(connection, session_id, next_version, session["intake"], feedback_data)
+                        connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), session_id))
+                        updated = session_payload(connection, session_id, user["id"])
+                    return json_response(start_response, HTTPStatus.CREATED, {"session": updated})
+
+        return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Not found."})
+    except PermissionError as error:
+        return json_response(start_response, HTTPStatus.UNAUTHORIZED, {"error": str(error)})
+    except ProviderError as error:
+        return json_response(start_response, HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+    except (ValueError, json.JSONDecodeError) as error:
+        return json_response(start_response, HTTPStatus.BAD_REQUEST, {"error": str(error)})
+
+
+def serve_static(environ, start_response, path):
+    # Serve files from the main site root by default, but allow a dedicated
+    # `player/` subtree to be served from ROOT/player when the request path
+    # begins with `/player`.
+    blocked_parts = {"data", "__pycache__"}
+
+    # Handle the special /player and /player/ cases and any files under /player/
+    if path == "/player" or path == "/player/" or path.startswith("/player/"):
+        base = (ROOT / "player").resolve()
+        # compute the relative path inside the player dir
+        rel = path[len("/player") :]
+        safe_rel = "index.html" if rel in ("", "/") else rel.lstrip("/")
+        file_path = (base / safe_rel).resolve()
+        # Ensure the resolved file is within the player directory
+        if not str(file_path).startswith(str(base)) or not file_path.is_file():
+            file_path = base / "index.html"
+    else:
+        safe_path = "index.html" if path == "/" else path.lstrip("/")
+        file_path = (ROOT / safe_path).resolve()
+
+    # Block access to sensitive directories and only allow common web assets
+    is_blocked = any(part in blocked_parts for part in file_path.relative_to(ROOT).parts) if str(file_path).startswith(str(ROOT)) else True
+    is_public_asset = file_path.suffix in MIME_TYPES
+    if is_blocked or not is_public_asset or not str(file_path).startswith(str(ROOT)) or not file_path.is_file():
+        file_path = ROOT / "index.html"
+    body = file_path.read_bytes()
+    headers = [
+        ("Content-Type", MIME_TYPES.get(file_path.suffix, "application/octet-stream")),
+        ("Content-Length", str(len(body))),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Referrer-Policy", "same-origin"),
+    ]
+    start_response(f"{HTTPStatus.OK.value} {HTTPStatus.OK.phrase}", headers)
+    return [body]
+
+
+def serve_audio(environ, start_response, path):
+    filename = path[len(AUDIO_URL_PATH) :].lstrip("/")
+    if not filename or ".." in filename or filename.startswith("/"):
+        start_response(f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not found."]
+    file_path = (AUDIO_DIR / filename).resolve()
+    if not str(file_path).startswith(str(AUDIO_DIR.resolve())) or not file_path.is_file():
+        start_response(f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not found."]
+    file_size = file_path.stat().st_size
+    range_header = environ.get("HTTP_RANGE")
+
+    def send_full():
+        body = file_path.read_bytes()
+        headers = [
+            ("Content-Type", MIME_TYPES.get(file_path.suffix, "application/octet-stream")),
+            ("Content-Length", str(len(body))),
+            ("Accept-Ranges", "bytes"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Referrer-Policy", "same-origin"),
+        ]
+        start_response(f"{HTTPStatus.OK.value} {HTTPStatus.OK.phrase}", headers)
+        return [body]
+
+    if not range_header:
+        return send_full()
+
+    # Parse Range header like: "bytes=START-" or "bytes=START-END"
+    try:
+        unit, ranges = range_header.split("=", 1)
+        if unit.strip() != "bytes":
+            return send_full()
+        start_str, end_str = ranges.split("-", 1)
+        start = int(start_str) if start_str.strip() else None
+        end = int(end_str) if end_str.strip() else None
+    except Exception:
+        return send_full()
+
+    if start is None and end is not None:
+        # suffix-byte-range-spec: last `end` bytes
+        if end == 0:
+            # invalid
+            start = 0
+        else:
+            start = max(0, file_size - end)
+        end = file_size - 1
+    if start is None:
+        return send_full()
+    if end is None or end >= file_size:
+        end = file_size - 1
+    if start > end or start < 0 or end < 0:
+        # Range Not Satisfiable
+        headers = [("Content-Range", f"bytes */{file_size}"), ("Content-Type", "text/plain; charset=utf-8")]
+        start_response(f"{HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value} {HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE.phrase}", headers)
+        return [b"Requested Range Not Satisfiable"]
+
+    length = end - start + 1
+    with open(file_path, "rb") as fh:
+        fh.seek(start)
+        chunk = fh.read(length)
+
+    headers = [
+        ("Content-Type", MIME_TYPES.get(file_path.suffix, "application/octet-stream")),
+        ("Content-Range", f"bytes {start}-{end}/{file_size}"),
+        ("Content-Length", str(len(chunk))),
+        ("Accept-Ranges", "bytes"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Referrer-Policy", "same-origin"),
+    ]
+    start_response(f"{HTTPStatus.PARTIAL_CONTENT.value} {HTTPStatus.PARTIAL_CONTENT.phrase}", headers)
+    return [chunk]
+
+
+def app(environ, start_response):
+    parsed = urlparse(environ.get("PATH_INFO", "/"))
+    path = parsed.path
+    method = environ.get("REQUEST_METHOD", "GET")
+    if path.startswith("/api/"):
+        return handle_api(environ, start_response, path, method)
+    if path.startswith(AUDIO_URL_PATH + "/"):
+        return serve_audio(environ, start_response, path)
+    if path.startswith("/cap/"):
+        return handle_captcha(environ, start_response, path, method)
+    return serve_static(environ, start_response, path)
+
+
+def handle_captcha(environ, start_response, path, method):
+    if path == "/cap/challenge" and method == "POST":
+        challenge = cap_server.create_challenge()
+        return json_response(start_response, HTTPStatus.OK, challenge)
+
+    if path == "/cap/redeem" and method == "POST":
+        payload = read_json(environ)
+        token = (payload.get("token") if isinstance(payload, dict) else None)
+        solutions = (payload.get("solutions") if isinstance(payload, dict) else None)
+        if not token or solutions is None:
+            raise ValueError("Captcha redeem request must include token and solutions.")
+        result = cap_server.redeem(token, solutions)
+        return json_response(start_response, HTTPStatus.OK, {"success": True, **result})
+
+    start_response(f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}", [("Content-Type", "application/json; charset=utf-8")])
+    return [json.dumps({"error": "Not found."}).encode("utf-8")]
+
+
+if __name__ == "__main__":
+    init_db()
+    port = int(os.environ.get("PORT", "5173"))
+    with make_server("", port, app) as server:
+        print(f"Neuorise running at http://localhost:{port}")
+        print(f"SQLite database: {DB_PATH}")
+        server.serve_forever()

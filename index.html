@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Healing Music Generator</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="home">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="#how">How it works</a>
+          <a href="/sessions.html" data-requires-auth>Sessions</a>
+        </nav>
+        <div class="auth-actions">
+          <button class="ghost-button" data-auth="login">Log in</button>
+          <button class="solid-button" data-auth="signup">Create account</button>
+        </div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Adaptive therapeutic sound</p>
+            <h1>Healing music shaped around your current state.</h1>
+            <p>
+              Neuorise turns emotional check-ins, heart rate, breathing rate,
+              and listening feedback into saved music-generation sessions with
+              Gemini and Suno integration points ready for production APIs.
+            </p>
+            <div class="hero-actions">
+              <button class="solid-button" data-auth="signup">Create account</button>
+              <button class="ghost-button" data-auth="login">Log in</button>
+              <a id="startSessionButton" class="solid-button hidden" href="/sessions.html">Start a new session</a>
+            </div>
+          </div>
+          <div class="sound-orbit" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <div class="pulse-core"></div>
+          </div>
+        </section>
+
+        <section class="workspace" id="how">
+          <div class="section-heading">
+            <p class="eyebrow">Product flow</p>
+            <h2>A private loop for better listening</h2>
+            <p>
+              Users must sign up before creating tracks, so every questionnaire,
+              generated prompt, track version, and feedback note is saved to
+              their own account.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <strong>1. Survey</strong>
+              <p>Collect mood, needs, preferences, heart rate, and respiratory rate.</p>
+            </article>
+            <article class="feature-card">
+              <strong>2. Gemini prompt</strong>
+              <p>Server-side Gemini prepares a therapeutic Suno prompt.</p>
+            </article>
+            <article class="feature-card">
+              <strong>3. Suno generation</strong>
+              <p>Suno creates track metadata, task status, and final audio.</p>
+            </article>
+            <article class="feature-card">
+              <strong>4. Feedback</strong>
+              <p>Thumbs, skips, and notes create new saved track versions.</p>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="authDialog">
+      <form method="dialog" class="auth-card" id="authForm">
+        <button type="button" class="close-button" aria-label="Close">x</button>
+        <p class="eyebrow" id="authModeLabel">Account</p>
+        <h2 id="authTitle">Log in</h2>
+        <label>
+          Name
+          <input name="name" type="text" autocomplete="name" />
+        </label>
+        <label>
+          Email
+          <input name="email" type="email" autocomplete="email" required />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" minlength="8" required />
+        </label>
+        <cap-widget
+          id="authCaptcha"
+          required
+          data-cap-api-endpoint="/cap/"
+        ></cap-widget><br><br>
+        <button class="solid-button" type="submit">Continue</button>
+        <p class="form-message" id="authMessage"></p>
+      </form>
+    </dialog>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

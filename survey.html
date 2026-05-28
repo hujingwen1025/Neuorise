@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Survey</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="survey">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/survey.html">Survey</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+        <div class="auth-actions hidden"></div>
+        <div class="profile-chip hidden">
+          <span id="profileInitials">N</span>
+          <button class="ghost-button" id="logoutButton">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="workspace">
+          <div class="section-heading">
+            <p class="eyebrow">Step 1</p>
+            <h1 class="page-title">Emotional status survey</h1>
+            <p>
+              Answer a short check-in and add basic physiological data. This is
+              wellness support, not medical diagnosis.
+            </p>
+          </div>
+
+          <form class="intake-grid" id="intakeForm">
+            <fieldset>
+              <legend>Emotional state</legend>
+              <label>
+                Current mood
+                <select name="mood" required>
+                  <option value="">Choose one</option>
+                  <option>Anxious</option>
+                  <option>Sad</option>
+                  <option>Overstimulated</option>
+                  <option>Restless</option>
+                  <option>Numb</option>
+                  <option>Hopeful</option>
+                  <option>Calm</option>
+                </select>
+              </label>
+              <label>
+                Energy level
+                <input name="energy" type="range" min="1" max="10" value="5" />
+                <span class="range-readout" data-for="energy">5</span>
+              </label>
+              <label>
+                Stress intensity
+                <input name="stress" type="range" min="1" max="10" value="6" />
+                <span class="range-readout" data-for="stress">6</span>
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Mental needs</legend>
+              <label>
+                What do you need most?
+                <select name="need" required>
+                  <option value="">Choose one</option>
+                  <option>Grounding</option>
+                  <option>Sleep preparation</option>
+                  <option>Emotional release</option>
+                  <option>Focus</option>
+                  <option>Self-compassion</option>
+                  <option>Gentle motivation</option>
+                </select>
+              </label>
+              <label>
+                Preferred sound texture
+                <select name="texture" required>
+                  <option value="">Choose one</option>
+                  <option>Warm piano and pads</option>
+                  <option>Ambient nature and soft drones</option>
+                  <option>Slow acoustic guitar</option>
+                  <option>Singing bowls and airy choir</option>
+                  <option>Lo-fi pulse and rain</option>
+                </select>
+              </label>
+              <label>
+                Avoid these sounds
+                <input name="avoid" type="text" placeholder="Sharp bells, lyrics, drums..." />
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Body signals</legend>
+              <label>
+                Heart rate
+                <input name="heartRate" type="number" min="40" max="180" value="74" required />
+              </label>
+              <label>
+                Respiratory rate
+                <input name="breathRate" type="number" min="4" max="40" value="14" required />
+              </label>
+              <label>
+                Session length
+                <select name="duration">
+                  <option value="2">2 minutes</option>
+                  <option value="5" selected>5 minutes</option>
+                  <option value="10">10 minutes</option>
+                  <option value="20">20 minutes</option>
+                </select>
+              </label>
+            </fieldset>
+
+            <fieldset class="span-3">
+              <legend>Mental symptom survey</legend>
+              <p class="scale-help">Rate each item from 1 (not at all) to 5 (all the time).</p>
+              <div class="scale-grid">
+                <label>
+                  Feelings of sadness
+                  <input name="sadness" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="sadness">3</span>
+                </label>
+                <label>
+                  Feeling no interest or pleasure in things
+                  <input name="noInterest" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="noInterest">3</span>
+                </label>
+                <label>
+                  Recurrent thoughts of death or suicide
+                  <input name="deathThoughts" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="deathThoughts">3</span>
+                </label>
+                <label>
+                  Hopelessness about the future
+                  <input name="hopelessness" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="hopelessness">3</span>
+                </label>
+                <label>
+                  Feeling anxious or fearful
+                  <input name="anxious" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="anxious">3</span>
+                </label>
+                <label>
+                  Excessive worry about several things
+                  <input name="excessiveWorry" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="excessiveWorry">3</span>
+                </label>
+                <label>
+                  Sudden attacks of panic with palpitations
+                  <input name="panicAttacks" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="panicAttacks">3</span>
+                </label>
+                <label>
+                  Fatigue or loss of energy
+                  <input name="fatigue" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="fatigue">3</span>
+                </label>
+                <label>
+                  Diminished ability to think or concentrate
+                  <input name="concentration" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="concentration">3</span>
+                </label>
+                <label>
+                  Difficulty falling asleep
+                  <input name="difficultySleeping" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="difficultySleeping">3</span>
+                </label>
+                <label>
+                  Restless or disturbed sleep
+                  <input name="disturbedSleep" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="disturbedSleep">3</span>
+                </label>
+                <label>
+                  Feeling easily irritated or annoyed
+                  <input name="irritable" type="range" min="1" max="5" value="3" />
+                  <span class="range-readout" data-for="irritable">3</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="span-3">
+              <legend>Music generation instructions</legend>
+              <label>
+                Tell us how you want the music to feel or what should be emphasized.
+                <textarea name="instructions" rows="5" placeholder="E.g. more spacious pads, gentle percussion, warm textures, avoid dramatic drops..."></textarea>
+              </label>
+            </fieldset>
+
+            <cap-widget
+                id="surveyCaptcha"
+                required
+                data-cap-api-endpoint="/cap/"
+              ></cap-widget><br>
+
+            <div class="form-footer">
+              <button class="solid-button" type="submit">Generate and save session</button>
+              <p class="form-message" id="surveyMessage"></p>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
