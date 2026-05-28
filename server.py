@@ -19,7 +19,7 @@ from wsgiref.simple_server import make_server
 from capjs_server import CapServer
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
+DATA_DIR = ROOT.parent / "data"
 AUDIO_DIR = DATA_DIR / "audio"
 DB_PATH = DATA_DIR / "neuorise.sqlite3"
 SESSION_COOKIE = "neuorise_session"
