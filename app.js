@@ -1,5 +1,9 @@
 import "https://cdn.jsdelivr.net/npm/cap-widget";
 
+document.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+});
+
 const appState = {
   user: null,
   session: null,
@@ -13,6 +17,8 @@ const appState = {
   // Lock to prevent concurrent refreshTrackStatus calls
   isRefreshingTrack: false,
 };
+
+const audioLoadingDescriptions = ['We are still creating your audio, give us a moment...', 'Still on it! Thanks for your patience...', 'Give us a bit more time. We are still creating your audio...'];
 
 const page = document.body.dataset.page;
 
@@ -249,7 +255,7 @@ function setupSurveyPage() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    setMessage("#surveyMessage", "Generating and saving your session...", "neutral");
+    setMessage("#surveyMessage", "Generating and saving your session. Please wait ...", "neutral");
     const formData = collectForm(form);
     const intake = normalizeIntake(formData);
     const captchaToken = formData["cap-token"];
@@ -287,7 +293,6 @@ function clearTrackRefresh() {
     clearTimeout(appState.pollTrackTimer);
     appState.pollTrackTimer = null;
   }
-  appState.isRefreshingTrack = false;
 }
 
 async function loadSession() {
@@ -309,6 +314,7 @@ function renderGeneration(session) {
   const versionLabel = track?.version ? `Version ${track.version}` : `Version ${session.tracks.indexOf(track) + 1}`;
   $("#trackTitle").textContent = track?.title || "Loading track";
   $("#trackSubtitle").textContent = `${session.intake.texture} tuned for ${session.intake.mood.toLowerCase()} mood, ${session.intake.heartRate} bpm heart rate, and ${session.intake.breathRate} breaths/min. · ${versionLabel} · ${formatTrackStatus(track?.status)}`;
+  renderSessionTitle(session);
   // Gemini plan and Suno request UI removed; no DOM updates required here.
   $("#feedbackLink").href = `/feedback.html?session=${session.id}`;
   configureAudio(track?.audio_config, track?.audio_url);
@@ -332,7 +338,7 @@ function renderGeneration(session) {
   renderTrackHistory(session);
   drawIdleVisualizer();
   if (track.provider_task_id && !track.audio_url && !["SUCCESS", "COMPLETE", "completed"].includes(track.status)) {
-    window.setTimeout(() => refreshTrackStatus(track.id), 5000);
+    scheduleTrackRefresh(track.id, 5000);
   }
 }
 
@@ -344,6 +350,66 @@ function getSelectedTrack(session) {
   }
 
   return session.tracks[session.tracks.length - 1];
+}
+
+function renderSessionTitle(session) {
+  const title = session.title || session.tracks?.[0]?.title || "Untitled session";
+  const input = $("#sessionTitleInput");
+  if (input) input.value = title;
+}
+
+let sessionTitleCheckTimer = null;
+
+function showSessionTitleCheck() {
+  const check = $("#sessionTitleSuccess");
+  if (!check) return;
+  check.classList.add("visible");
+  if (sessionTitleCheckTimer) {
+    clearTimeout(sessionTitleCheckTimer);
+  }
+  sessionTitleCheckTimer = window.setTimeout(() => {
+    check.classList.remove("visible");
+    sessionTitleCheckTimer = null;
+  }, 3000);
+}
+
+async function saveSessionTitle() {
+  if (!appState.session) return;
+  const input = $("#sessionTitleInput");
+  if (!input) return;
+  const title = input.value.trim();
+  if (!title) {
+    input.value = appState.session.title || "";
+    return;
+  }
+  if (title === appState.session.title) {
+    return;
+  }
+
+  try {
+    const payload = await api(`/api/sessions/${appState.session.id}`, {
+      method: "PATCH",
+      body: { title },
+    });
+    appState.session = payload.session;
+    renderSessionTitle(appState.session);
+    showSessionTitleCheck();
+  } catch (error) {
+    console.error(error);
+    input.value = appState.session.title || "";
+  }
+}
+
+function setupSessionTitleControls() {
+  const input = $("#sessionTitleInput");
+  if (!input) return;
+  input.addEventListener("blur", saveSessionTitle);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveSessionTitle();
+    }
+  });
 }
 
 function formatTrackStatus(status) {
@@ -396,7 +462,19 @@ function selectTrackVersion(trackId) {
 }
 
 async function refreshTrackStatus(trackId) {
+  if (!trackId) return;
+  // If a refresh is already in progress, schedule a retry and bail out.
+  if (appState.isRefreshingTrack) {
+    scheduleTrackRefresh(trackId, 1000);
+    return;
+  }
+
+  appState.isRefreshingTrack = true;
+  // Clear any pending scheduled refresh since we're about to perform one now.
+  clearTrackRefresh();
   setMessage("#generationMessage", "Suno is generating this track. Please wait ...", "neutral");
+  setMessage("#placeholderDescription", audioLoadingDescriptions[Math.floor(Math.random() * audioLoadingDescriptions.length)]);
+
   try {
     const payload = await api(`/api/tracks/${trackId}/refresh`);
     appState.session = payload.session;
@@ -404,19 +482,26 @@ async function refreshTrackStatus(trackId) {
     renderGeneration(payload.session);
     if (!appState.track.audio_url && ["PENDING", "TEXT_SUCCESS", "FIRST_SUCCESS"].includes(appState.track.status)) {
       // Poll every 5 seconds to match server's MIN_POLL_INTERVAL_SECONDS
-      window.setTimeout(() => refreshTrackStatus(appState.track.id), 5000);
+      scheduleTrackRefresh(appState.track.id, 5000);
     } else if (appState.track.audio_url) {
       setMessage("#generationMessage", "Suno audio is ready to play.", "neutral");
     }
   } catch (error) {
     setMessage("#generationMessage", error.message, "error");
+    // Retry after a short delay in case this was a transient error
+    scheduleTrackRefresh(trackId, 5000);
+  } finally {
+    appState.isRefreshingTrack = false;
   }
 }
 
 async function setupGenerationPage() {
   try {
     const session = await loadSession();
-    if (session) renderGeneration(session);
+    if (session) {
+      renderGeneration(session);
+      setupSessionTitleControls();
+    }
   } catch (error) {
     setMessage("#generationMessage", error.message, "error");
   }
@@ -463,6 +548,7 @@ async function setupGenerationPage() {
 
 function renderFeedback(session) {
   const track = session.tracks[session.tracks.length - 1];
+  renderSessionTitle(session);
   $("#feedbackTrackTitle").textContent = track.title;
   $("#feedbackTrackMeta").textContent = `${session.intake.need} for ${session.intake.mood}; latest version ${track.version}.`;
   $("#backToGeneration").href = `/generation.html?session=${session.id}`;
@@ -489,7 +575,10 @@ function renderHistory(session) {
 async function setupFeedbackPage() {
   try {
     const session = await loadSession();
-    if (session) renderFeedback(session);
+    if (session) {
+      renderFeedback(session);
+      setupSessionTitleControls();
+    }
   } catch (error) {
     setMessage("#feedbackMessage", error.message, "error");
   }
@@ -518,8 +607,8 @@ async function setupFeedbackPage() {
 
 async function submitFeedback({ rating, feedbackText, skipped, redirectToFeedback, captchaToken }) {
   if (!appState.session || !appState.track) return;
-  setMessage("#feedbackMessage", "Saving feedback and generating the next version...", "neutral");
-  setMessage("#generationMessage", "Saving skip and generating a revised track...", "neutral");
+  setMessage("#feedbackMessage", "Saving feedback and generating the next version. Please wait ...", "neutral");
+  setMessage("#generationMessage", "Saving skip and generating a revised track. Please wait ...", "neutral");
 
   try {
     const payload = await api(`/api/sessions/${appState.session.id}/feedback`, {

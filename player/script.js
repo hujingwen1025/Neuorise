@@ -1,3 +1,7 @@
+document.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+});
+
 const musicContainer = document.getElementById("music-container");
 const playButton = document.getElementById("play");
 const prevButton = document.getElementById("prev");

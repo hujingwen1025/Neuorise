@@ -38,6 +38,10 @@
           </div>
 
           <article class="panel compact-panel">
+            <div class="session-title-row">
+              <input id="sessionTitleInput" type="text" placeholder="Session name" />
+              <span id="sessionTitleSuccess" class="session-title-success" aria-hidden="true">✓</span>
+            </div>
             <h3 id="feedbackTrackTitle">Loading track</h3>
             <p id="feedbackTrackMeta">Loading saved session.</p>
           </article>
@@ -64,12 +68,38 @@
               <button class="solid-button" type="submit">Generate improved track</button>
               <a class="ghost-button" id="backToGeneration" href="/generation.html">Back to track</a>
             </div>
-            <p class="form-message" id="feedbackMessage"></p>
+            <b><p class="form-message" id="feedbackMessage"></p></b>
           </form>
 
           <div class="history" id="historyList" aria-live="polite"></div>
         </section>
       </main>
+
+      <footer class="site-footer" aria-label="Site footer">
+        <div class="footer-inner">
+          <div class="footer-section">
+            <p class="footer-brand">Neuorise</p>
+            <p>Created by 傅辅航 (Zhuhang Fu) and 胡竞文 (Jingwen Hu).</p>
+          </div>
+          <div class="footer-section">
+            <p class="footer-heading">Quick navigation</p>
+            <nav class="footer-nav" aria-label="Footer navigation">
+              <a href="/">Home</a>
+              <a href="/survey.html">Generate</a>
+              <a href="/sessions.html">Sessions</a>
+              <a href="/profile.html">Profile</a>
+            </nav>
+          </div>
+          <div class="footer-section">
+            <p class="footer-heading">Contact</p>
+            <p><a href="mailto:jingwen.hu@exabyte.org.cn">jingwen.hu@exabyte.org.cn</a></p>
+            <p><a href="mailto:fufh.franky2025@outlook.com">fufh.franky2025@outlook.com</a></p>
+            <p><a href="https://github.com/hujingwen1025/Neuorise" target="_blank" rel="noopener noreferrer"><strong>Neuorise on GitHub</strong></a></p>
+            <p><a href="https://forms.office.com/r/q8ueMCaSxT" target="_blank" rel="noopener noreferrer"><strong>Suggestion Box</strong></a></p>
+          </div>
+        </div>
+        <p class="footer-copy">&copy; 2026 Neuorise. All rights reserved.</p>
+      </footer>
     </div>
     <script src="./app.js" type="module"></script>
   </body>

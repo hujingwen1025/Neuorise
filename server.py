@@ -121,6 +121,12 @@ def iso_now():
     return utc_now().isoformat()
 
 
+def generate_session_id():
+    """Generate a random 8-character session ID using lowercase letters and numbers."""
+    chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(secrets.choice(chars) for _ in range(8))
+
+
 def db():
     DATA_DIR.mkdir(exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
@@ -134,7 +140,7 @@ def init_db():
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              id TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               email TEXT NOT NULL UNIQUE,
               password_hash TEXT NOT NULL,
@@ -143,14 +149,14 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS auth_sessions (
               id TEXT PRIMARY KEY,
-              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
               expires_at TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS healing_sessions (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              id TEXT PRIMARY KEY,
+              user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
               title TEXT NOT NULL,
               intake_json TEXT NOT NULL,
               created_at TEXT NOT NULL,
@@ -159,7 +165,7 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS tracks (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
-              session_id INTEGER NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
+              session_id TEXT NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
               version INTEGER NOT NULL,
               title TEXT NOT NULL,
               gemini_prompt TEXT NOT NULL,
@@ -175,13 +181,22 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS feedback (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
-              session_id INTEGER NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
+              session_id TEXT NOT NULL REFERENCES healing_sessions(id) ON DELETE CASCADE,
               track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
               rating TEXT NOT NULL CHECK (rating IN ('up', 'down')),
               feedback_text TEXT,
               skipped INTEGER NOT NULL DEFAULT 0,
               created_at TEXT NOT NULL
             );
+
+                        CREATE TABLE IF NOT EXISTS folders (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            name TEXT NOT NULL,
+                            color TEXT NOT NULL DEFAULT '#92d8c4',
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
 
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON healing_sessions(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tracks_session ON tracks(session_id, version);
@@ -190,6 +205,8 @@ def init_db():
         )
         ensure_column(connection, "tracks", "provider_task_id", "TEXT")
         ensure_column(connection, "tracks", "provider_response_json", "TEXT")
+        ensure_column(connection, "healing_sessions", "favorite", "INTEGER DEFAULT 0")
+        ensure_column(connection, "healing_sessions", "folder_id", "INTEGER REFERENCES folders(id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_tracks_provider_task ON tracks(provider_task_id)")
 
 
@@ -401,8 +418,6 @@ def http_json(method, url, headers=None, payload=None):
     try:
         with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS, context=provider_ssl_context()) as response:
             body = response.read().decode("utf-8")
-            print('Body received from provider:')
-            print(body)
             return json.loads(body) if body else {}
     except HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
@@ -704,7 +719,6 @@ def download_audio_file(audio_url, task_id, track_id):
         raise ProviderError(f"Audio download failed: {error.reason}") from error
     except Exception as error:
         raise ProviderError(f"Audio download failed: {error}") from error
-
     return local_path
 
 
@@ -744,7 +758,7 @@ def suno_update_from_payload(payload):
     }
 
 
-def persist_suno_update(connection, update):
+def persist_suno_update(connection, update, schedule_background=True):
     if not update.get("task_id"):
         return None
     track = connection.execute(
@@ -768,6 +782,7 @@ def persist_suno_update(connection, update):
     audio_url = update.get("audio_url")
     local_audio_url = track["audio_url"]
 
+
     # If we already have a local copy, keep it. Otherwise, if the
     # provider returned an audio URL, store the remote URL and schedule
     # a background download (the downloader will update the DB when
@@ -788,14 +803,15 @@ def persist_suno_update(connection, update):
         connection.execute(
             """
             UPDATE tracks
-            SET status = ?, audio_url = COALESCE(?, audio_url), title = COALESCE(?, title), provider_response_json = ?
+            SET status = ?, audio_url = COALESCE(NULL, audio_url), title = COALESCE(?, title), provider_response_json = ?
             WHERE id = ?
             """,
-            (update["status"], audio_url, update.get("title"), json.dumps(update["provider_response"]), track["id"]),
+            (update["status"], update.get("title"), json.dumps(update["provider_response"]), track["id"]),
         )
 
-        # Schedule background download if the URL is external (not a local /audio/ path).
-        if not str(audio_url).startswith(AUDIO_URL_PATH):
+        # Schedule background download if requested and the URL is external
+        # (not a local /audio/ path).
+        if schedule_background and not str(audio_url).startswith(AUDIO_URL_PATH):
             # Start a daemon thread to download and save the audio file.
             threading.Thread(
                 target=_background_download_and_persist,
@@ -895,7 +911,7 @@ def create_track(connection, session_id, version, intake, feedback=None):
             created_at,
         ),
     )
-    return cursor.lastrowid
+    return cursor.lastrowid, plan["title"]
 
 
 def session_payload(connection, session_id, user_id):
@@ -916,6 +932,7 @@ def session_payload(connection, session_id, user_id):
     return {
         "id": session["id"],
         "title": session["title"],
+        "favorite": bool(session["favorite"] if "favorite" in session.keys() else False),
         "intake": json.loads(session["intake_json"]),
         "created_at": session["created_at"],
         "updated_at": session["updated_at"],
@@ -947,6 +964,7 @@ def session_payload(connection, session_id, user_id):
             }
             for item in feedback
         ],
+        "folder": (lambda fid: (None if not fid else (lambda r: {"id": r["id"], "name": r["name"], "color": r["color"]} if r else None)(connection.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (fid, user_id)).fetchone())))(session["folder_id"] if "folder_id" in session.keys() else None),
     }
 
 
@@ -966,13 +984,14 @@ def handle_api(environ, start_response, path, method):
                 raise ValueError("Name, email, and an 8+ character password are required.")
             with db() as connection:
                 try:
-                    cursor = connection.execute(
-                        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                        (name, email, hash_password(password), iso_now()),
+                    user_id = generate_session_id()
+                    connection.execute(
+                        "INSERT INTO users (id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (user_id, name, email, hash_password(password), iso_now()),
                     )
                 except sqlite3.IntegrityError:
                     raise ValueError("An account with that email already exists.")
-                user = connection.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                user = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             return json_response(start_response, HTTPStatus.CREATED, {"user": serialize_user(user)}, [create_session_cookie(user["id"])])
 
         if path == "/api/login" and method == "POST":
@@ -1062,7 +1081,44 @@ def handle_api(environ, start_response, path, method):
                         if time_since_last_poll.total_seconds() >= MIN_POLL_INTERVAL_SECONDS:
                             update = poll_suno_task(track["provider_task_id"])
                             update["task_id"] = track["provider_task_id"]
-                            persist_suno_update(connection, update)
+                            # Persist update but do not schedule a background download yet;
+                            # we'll perform a blocking download here so the refresh call
+                            # returns a local server audio URL once available.
+                            persist_suno_update(connection, update, schedule_background=True)
+
+                            # Re-fetch the track to inspect current provider status and audio_url
+                            refreshed = connection.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+                            try:
+                                provider_status = (refreshed["status"] or "").upper()
+                                audio_url = refreshed["audio_url"]
+                            except Exception:
+                                provider_status = ""
+                                audio_url = None
+
+                            # If the provider has reached a terminal status and gave an
+                            # external audio URL, download it synchronously and update
+                            # the DB to point to the local copy before returning.
+                            if is_suno_terminal_status(provider_status) and audio_url and not str(audio_url).startswith(AUDIO_URL_PATH):
+                                try:
+                                    local_path = download_audio_file(audio_url, refreshed["provider_task_id"], refreshed["id"])
+                                    local_audio_url = f"{AUDIO_URL_PATH}/{local_path.name}"
+                                    connection.execute(
+                                        """
+                                        UPDATE tracks
+                                        SET audio_url = ?, status = ?, provider_response_json = COALESCE(provider_response_json, ?)
+                                        WHERE id = ?
+                                        """,
+                                        (local_audio_url, "COMPLETED", json.dumps({}), refreshed["id"]),
+                                    )
+                                    connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), refreshed["session_id"]))
+                                except ProviderError:
+                                    # If synchronous download fails, fall back to scheduling
+                                    # a background download so it can be retried asynchronously.
+                                    threading.Thread(
+                                        target=_background_download_and_persist,
+                                        args=(refreshed["id"], update["task_id"], audio_url),
+                                        daemon=True,
+                                    ).start()
                     session = session_payload(connection, track["session_id"], user["id"])
                 return json_response(start_response, HTTPStatus.OK, {"session": session})
 
@@ -1103,28 +1159,80 @@ def handle_api(environ, start_response, path, method):
             intake = payload.get("intake") or {}
             validate_intake(intake)
             now = iso_now()
-            title = f'{intake["need"]} for {intake["mood"]}'
             with db() as connection:
-                cursor = connection.execute(
-                    "INSERT INTO healing_sessions (user_id, title, intake_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    (user["id"], title, json.dumps(intake), now, now),
+                session_id = generate_session_id()
+                connection.execute(
+                    "INSERT INTO healing_sessions (id, user_id, title, intake_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (session_id, user["id"], "", json.dumps(intake), now, now),
                 )
-                session_id = cursor.lastrowid
-                create_track(connection, session_id, 1, intake)
+                _, track_title = create_track(connection, session_id, 1, intake)
+                connection.execute(
+                    "UPDATE healing_sessions SET title = ?, updated_at = ? WHERE id = ?",
+                    (track_title, iso_now(), session_id),
+                )
                 session = session_payload(connection, session_id, user["id"])
             return json_response(start_response, HTTPStatus.CREATED, {"session": session})
+
+        if path == "/api/sessions/bulk" and method == "DELETE":
+            user = require_user(environ)
+            payload = read_json(environ)
+            ids = payload.get("ids") or []
+            if not isinstance(ids, list) or not ids:
+                raise ValueError("No session ids provided for bulk delete.")
+            with db() as connection:
+                # Only delete sessions owned by user
+                connection.execute(
+                    f"DELETE FROM healing_sessions WHERE user_id = ? AND id IN ({','.join('?' for _ in ids)})",
+                    (user["id"],) + tuple(ids),
+                )
+            return json_response(start_response, HTTPStatus.OK, {"message": "Sessions deleted."})
 
         if path.startswith("/api/sessions/"):
             user = require_user(environ)
             parts = path.strip("/").split("/")
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "sessions":
-                session_id = int(parts[2])
+                session_id = parts[2]
                 if len(parts) == 3 and method == "GET":
                     with db() as connection:
                         session = session_payload(connection, session_id, user["id"])
                     if not session:
                         return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Session not found."})
                     return json_response(start_response, HTTPStatus.OK, {"session": session})
+                if len(parts) == 3 and method == "PATCH":
+                    payload = read_json(environ)
+                    updates = {}
+                    if "title" in payload:
+                        title = (payload.get("title") or "").strip()
+                        if not title:
+                            raise ValueError("Title cannot be empty.")
+                        updates["title"] = title
+                    if "favorite" in payload:
+                        fav = payload.get("favorite")
+                        updates["favorite"] = 1 if fav else 0
+                    if "folder_id" in payload:
+                        folder_id = payload.get("folder_id")
+                        if folder_id is None:
+                            updates["folder_id"] = None
+                        else:
+                            # ensure folder belongs to user
+                            with db() as connection:
+                                row = connection.execute("SELECT id FROM folders WHERE id = ? AND user_id = ?", (folder_id, user["id"])) .fetchone()
+                            if not row:
+                                raise ValueError("Folder not found.")
+                            updates["folder_id"] = folder_id
+
+                    if not updates:
+                        raise ValueError("No valid session fields provided to update.")
+
+                    set_clause = ", ".join(f"{k} = ?" for k in updates.keys()) + ", updated_at = ?"
+                    params = list(updates.values()) + [iso_now(), session_id]
+                    with db() as connection:
+                        session = session_payload(connection, session_id, user["id"])
+                        if not session:
+                            return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Session not found."})
+                        connection.execute(f"UPDATE healing_sessions SET {set_clause} WHERE id = ?", params)
+                        updated = session_payload(connection, session_id, user["id"])
+                    return json_response(start_response, HTTPStatus.OK, {"session": updated})
                 if len(parts) == 3 and method == "DELETE":
                     with db() as connection:
                         session = session_payload(connection, session_id, user["id"])
@@ -1159,6 +1267,76 @@ def handle_api(environ, start_response, path, method):
                         connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), session_id))
                         updated = session_payload(connection, session_id, user["id"])
                     return json_response(start_response, HTTPStatus.CREATED, {"session": updated})
+
+        if path == "/api/folders" and method == "GET":
+            user = require_user(environ)
+            with db() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM folders WHERE user_id = ? ORDER BY updated_at DESC",
+                    (user["id"],),
+                ).fetchall()
+            folders = [ {"id": r["id"], "name": r["name"], "color": r["color"], "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in rows ]
+            return json_response(start_response, HTTPStatus.OK, {"folders": folders})
+
+        if path == "/api/folders" and method == "POST":
+            user = require_user(environ)
+            payload = read_json(environ)
+            name = (payload.get("name") or "").strip()
+            color = (payload.get("color") or "#92d8c4").strip()
+            if not name:
+                raise ValueError("Folder name is required.")
+            now = iso_now()
+            with db() as connection:
+                cursor = connection.execute(
+                    "INSERT INTO folders (user_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (user["id"], name, color, now, now),
+                )
+                folder = connection.execute("SELECT * FROM folders WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            return json_response(start_response, HTTPStatus.CREATED, {"folder": {"id": folder["id"], "name": folder["name"], "color": folder["color"], "created_at": folder["created_at"], "updated_at": folder["updated_at"]}})
+
+        if path.startswith("/api/folders/"):
+            user = require_user(environ)
+            parts = path.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "folders":
+                folder_id = int(parts[2])
+                if len(parts) == 3 and method == "PATCH":
+                    payload = read_json(environ)
+                    updates = {}
+                    if "name" in payload:
+                        name = (payload.get("name") or "").strip()
+                        if not name:
+                            raise ValueError("Folder name cannot be empty.")
+                        updates["name"] = name
+                    if "color" in payload:
+                        color = (payload.get("color") or "").strip()
+                        updates["color"] = color
+                    if not updates:
+                        raise ValueError("No valid folder fields provided.")
+                    set_clause = ", ".join(f"{k} = ?" for k in updates.keys()) + ", updated_at = ?"
+                    params = list(updates.values()) + [iso_now(), folder_id]
+                    with db() as connection:
+                        row = connection.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, user["id"])) .fetchone()
+                        if not row:
+                            return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Folder not found."})
+                        connection.execute(f"UPDATE folders SET {set_clause} WHERE id = ?", params)
+                        updated = connection.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+                    return json_response(start_response, HTTPStatus.OK, {"folder": {"id": updated["id"], "name": updated["name"], "color": updated["color"], "created_at": updated["created_at"], "updated_at": updated["updated_at"]}})
+                if len(parts) == 4 and parts[3] == "addSessions" and method == "POST":
+                    payload = read_json(environ)
+                    ids = payload.get("ids") or []
+                    if not isinstance(ids, list) or not ids:
+                        raise ValueError("No session ids provided.")
+                    with db() as connection:
+                        # ensure folder exists and belongs to user
+                        row = connection.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, user["id"])) .fetchone()
+                        if not row:
+                            return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Folder not found."})
+                        # update sessions
+                        connection.execute(
+                            f"UPDATE healing_sessions SET folder_id = ? WHERE user_id = ? AND id IN ({','.join('?' for _ in ids)})",
+                            (folder_id, user["id"]) + tuple(ids),
+                        )
+                    return json_response(start_response, HTTPStatus.OK, {"message": "Sessions added to folder."})
 
         return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Not found."})
     except PermissionError as error:
@@ -1313,6 +1491,4 @@ if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", "5173"))
     with make_server("", port, app) as server:
-        print(f"Neuorise running at http://localhost:{port}")
-        print(f"SQLite database: {DB_PATH}")
         server.serve_forever()

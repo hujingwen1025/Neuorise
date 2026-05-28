@@ -407,6 +407,63 @@ textarea {
   outline: none;
 }
 
+#sessionTitleInput {
+  border-radius: 0;
+  width: 100%;
+  border: 0;
+  border-bottom: 1.5px dotted rgba(47, 60, 56, 0.42);
+  background: transparent;
+  color: var(--ink);
+  font-size: clamp(1.4rem, 2vw, 2rem);
+  font-weight: 800;
+  padding: 0 0 4px;
+  margin: 0;
+  outline: none;
+  transition: border-color 180ms ease, opacity 180ms ease, background 180ms ease, border-radius 180ms ease;
+}
+
+#sessionTitleInput:focus {
+  box-shadow: none;
+  border-bottom-color: transparent;
+  background: rgba(0, 0, 0, 0.04);
+  transition: border-color 180ms ease, background 180ms ease, border-radius 180ms ease;
+}
+
+#sessionTitleInput:hover {
+  transition: border-color 180ms ease, background 180ms ease, border-radius 180ms ease;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.session-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+#sessionTitleInput {
+  flex: 1;
+  min-width: 0;
+}
+
+#sessionTitleInput::placeholder {
+  color: rgba(47, 60, 56, 0.42);
+}
+
+.session-title-success {
+  opacity: 0;
+  transform: translateX(8px);
+  color: var(--green);
+  font-size: 1.5rem;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.session-title-success.visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -847,6 +904,78 @@ dialog::backdrop {
 
 .hidden {
   display: none;
+}
+
+.site-footer {
+  margin: 32px auto 18px;
+  padding: 24px 22px;
+  border-top: 1px solid rgba(47, 125, 109, 0.12);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--muted);
+}
+
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  max-width: 1180px;
+}
+
+.footer-section {
+  min-width: min(220px, 100%);
+}
+
+.footer-brand {
+  margin: 0 0 10px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.footer-heading {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+
+.footer-nav a {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.footer-nav a:hover {
+  color: var(--ink);
+}
+
+.footer-copy {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+@media (max-width: 760px) {
+  .footer-inner {
+    gap: 16px;
+  }
+
+  .footer-section {
+    min-width: 100%;
+  }
+
+  .footer-nav {
+    gap: 8px 14px;
+  }
 }
 
 @media (max-width: 900px) {

@@ -104,6 +104,7 @@ h1{
   cursor: pointer;
   padding: 10px;
   margin: 0 20px;
+  transition: color 0.18s ease-in;
 }
 
 .action-btn:focus {
