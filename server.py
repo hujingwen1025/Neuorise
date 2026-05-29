@@ -402,8 +402,8 @@ def send_reset_password_email(to_email, reset_url, name=None):
                 server.starttls()
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
-    except:
-        pass
+    except Exception as e:
+        print(f"Error during sending reset password email: {e}")
 
 def send_verification_email(to_email, token, name=None):
     """Send an email with a verification link using SMTP settings from environment."""
