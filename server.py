@@ -4,12 +4,11 @@ import hmac
 import json
 import os
 import re
+import resend
 import secrets
 import sqlite3
 import ssl
 import threading
-import smtplib
-from email.message import EmailMessage
 from urllib.parse import parse_qs
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -361,59 +360,51 @@ def create_session_cookie(user_id):
     )
 
 
-def send_reset_password_email(to_email, reset_url, name=None):
-    """Send password reset email with clickable link."""
-    try:
-        smtp_server = os.environ.get("SMTP_SERVER")
-        smtp_port = int(os.environ.get("SMTP_PORT", "465"))
-        smtp_account = os.environ.get("SMTP_ACCOUNT")
-        smtp_password = os.environ.get("SMTP_PASSWORD")
-        if not all([smtp_server, smtp_account, smtp_password]):
-            return
-
-        display_name = name or to_email.split("@")[0]
-        msg = EmailMessage()
-        msg["From"] = smtp_account
-        msg["To"] = to_email
-        msg["Subject"] = "Reset your Neuorise password"
-        msg.set_content(
-            f"Hello {display_name},\n\n"
-            f"Click the link below to reset your password:\n\n{reset_url}\n\n"
-            f"This link expires in 1 hour.\n\n"
-            f"If you didn't request this, please ignore this email."
-        )
-        html = f"""<html><body style='font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #333;'>
-          <p>Hello {display_name},</p>
-          <p>Click the link below to reset your password:</p>
-          <p><a href='{reset_url}' style='display: inline-block; padding: 10px 20px; background: #6366f1; color: white; text-decoration: none; border-radius: 4px;'>Reset Password</a></p>
-          <p>Or copy this link: <code>{reset_url}</code></p>
-          <p style='color: #999; font-size: 12px;'>This link expires in 1 hour.</p>
-          <p style='color: #999; font-size: 12px;'>If you didn't request this, please ignore this email.</p>
-        </body></html>"""
-        msg.add_alternative(html, subtype="html")
-
-        if '465' in str(smtp_port):
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
-                server.login(smtp_account, smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(smtp_account, smtp_password)
-                server.send_message(msg)
-    except:
-        pass
-
-def send_verification_email(to_email, token, name=None):
-    """Send an email with a verification link using SMTP settings from environment."""
-    smtp_server = os.environ.get("SMTP_SERVER")
-    smtp_port = int(os.environ.get("SMTP_PORT", "0") or 0)
-    smtp_account = os.environ.get("SMTP_ACCOUNT")
-    smtp_password = os.environ.get("SMTP_PASSWORD")
-    if not smtp_server or not smtp_port or not smtp_account or not smtp_password:
+def _send_email_with_resend(to_email, subject, html, text=None, from_address=None):
+    api_key = os.environ.get("RESEND_APIKEY")
+    from_address = from_address or os.environ.get("RESEND_SENDER_EMAIL")
+    if not api_key or not from_address:
         return
 
+    resend.api_key = api_key
+    params = {
+        "from": from_address,
+        "to": [to_email],
+        "subject": subject,
+        "html": html,
+    }
+    if text:
+        params["text"] = text
+
+    try:
+        resend.Emails.send(params)
+    except Exception:
+        pass
+
+
+def send_reset_password_email(to_email, reset_url, name=None):
+    """Send password reset email with clickable link."""
+    display_name = name or to_email.split("@")[0]
+    subject = "Reset your Neuorise password"
+    text = (
+        f"Hello {display_name},\n\n"
+        f"Click the link below to reset your password:\n\n{reset_url}\n\n"
+        f"This link expires in 1 hour.\n\n"
+        f"If you didn't request this, please ignore this email."
+    )
+    html = f"""<html><body style='font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #333;'>
+      <p>Hello {display_name},</p>
+      <p>Click the link below to reset your password:</p>
+      <p><a href='{reset_url}' style='display: inline-block; padding: 10px 20px; background: #6366f1; color: white; text-decoration: none; border-radius: 4px;'>Reset Password</a></p>
+      <p>Or copy this link: <code>{reset_url}</code></p>
+      <p style='color: #999; font-size: 12px;'>This link expires in 1 hour.</p>
+      <p style='color: #999; font-size: 12px;'>If you didn't request this, please ignore this email.</p>
+    </body></html>"""
+    _send_email_with_resend(to_email, subject, html, text=text)
+
+
+def send_verification_email(to_email, token, name=None):
+    """Send an email with a verification link using Resend."""
     site_url = os.environ.get("SITE_URL")
     if not site_url:
         port = os.environ.get("PORT", "5173")
@@ -423,7 +414,12 @@ def send_verification_email(to_email, token, name=None):
 
     subject = "Verify your Neuorise email"
     friendly = name or "User"
-    text = f"Hi {friendly},\n\nPlease verify your email address by clicking the link below:\n\n{verify_url}\n\nIf you did not sign up, you can ignore this email.\n\nThanks,\nNeuorise Team"
+    text = (
+        f"Hi {friendly},\n\n"
+        f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\n"
+        f"If you did not sign up, you can ignore this email.\n\n"
+        f"Thanks,\nNeuorise Team"
+    )
     html = f"""
     <html>
       <body>
@@ -435,30 +431,7 @@ def send_verification_email(to_email, token, name=None):
       </body>
     </html>
     """
-
-    msg = EmailMessage()
-    msg["From"] = smtp_account
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.set_content(text)
-    msg.add_alternative(html, subtype="html")
-
-    try:
-        if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
-                server.login(smtp_account, smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
-                server.ehlo()
-                try:
-                    server.starttls()
-                except Exception:
-                    pass
-                server.login(smtp_account, smtp_password)
-                server.send_message(msg)
-    except:
-        pass
+    _send_email_with_resend(to_email, subject, html, text=text)
 
 def clear_session_cookie(environ):
     token = get_cookie(environ, SESSION_COOKIE)

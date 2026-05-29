@@ -45,25 +45,15 @@ jobs:
             else
               echo "SUNO_APIKEY=${{ secrets.SUNO_APIKEY }}" >> .env
             fi
-            if grep -q '^SMTP_SERVER=' .env; then
-              sed -i 's|^SMTP_SERVER=.*|SMTP_SERVER=${{ secrets.SMTP_SERVER }}|' .env
+            if grep -q '^RESEND_APIKEY=' .env; then
+              sed -i 's|^RESEND_APIKEY=.*|RESEND_APIKEY=${{ secrets.RESEND_APIKEY }}|' .env
             else
-              echo "SMTP_SERVER=${{ secrets.SMTP_SERVER }}" >> .env
+              echo "RESEND_APIKEY=${{ secrets.RESEND_APIKEY }}" >> .env
             fi
-            if grep -q '^SMTP_PORT=' .env; then
-              sed -i 's|^SMTP_PORT=.*|SMTP_PORT=${{ secrets.SMTP_PORT }}|' .env
+            if grep -q '^RESEND_SENDER_EMAIL=' .env; then
+              sed -i 's|^RESEND_SENDER_EMAIL=.*|RESEND_SENDER_EMAIL=${{ secrets.RESEND_SENDER_EMAIL }}|' .env
             else
-              echo "SMTP_PORT=${{ secrets.SMTP_PORT }}" >> .env
-            fi
-            if grep -q '^SMTP_ACCOUNT=' .env; then
-              sed -i 's|^SMTP_ACCOUNT=.*|SMTP_ACCOUNT=${{ secrets.SMTP_ACCOUNT }}|' .env
-            else
-              echo "SMTP_ACCOUNT=${{ secrets.SMTP_ACCOUNT }}" >> .env
-            fi
-            if grep -q '^SMTP_PASSWORD=' .env; then
-              sed -i 's|^SMTP_PASSWORD=.*|SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}|' .env
-            else
-              echo "SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}" >> .env
+              echo "RESEND_SENDER_EMAIL=${{ secrets.RESEND_SENDER_EMAIL }}" >> .env
             fi
             if grep -q '^SITE_URL=' .env; then
               sed -i 's|^SITE_URL=.*|SITE_URL=${{ secrets.SITE_URL }}|' .env
