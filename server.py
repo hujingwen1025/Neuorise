@@ -32,7 +32,6 @@ MIN_POLL_INTERVAL_SECONDS = 5
 SUNO_BASE_URL = os.environ.get("SUNO_BASE_URL", "https://api.sunoapi.org/api/v1")
 GEMINI_BASE_URL = "https://api.openai-proxy.org/google"
 AUDIO_URL_PATH = "/audio"
-# Dummy callback URL: Suno API requires this parameter even though we use polling instead
 DUMMY_CALLBACK_URL = "https://example.com/suno-callback"
 
 MIME_TYPES = {
@@ -910,22 +909,10 @@ def persist_suno_update(connection, update, schedule_background=True):
     if not track:
         return None
 
-    # Persist the provider status and response immediately and avoid
-    # performing potentially long-running audio downloads on the
-    # request-handling thread. If we received an audio URL from Suno,
-    # store the remote URL now and schedule a background downloader to
-    # fetch and save a local copy. This prevents the WSGI server from
-    # blocking other requests while downloads complete.
     audio_url = update.get("audio_url")
     local_audio_url = track["audio_url"]
 
-
-    # If we already have a local copy, keep it. Otherwise, if the
-    # provider returned an audio URL, store the remote URL and schedule
-    # a background download (the downloader will update the DB when
-    # finished).
     if local_audio_url and local_audio_url.startswith(AUDIO_URL_PATH):
-        # Already have local copy; just update provider response/status
         connection.execute(
             """
             UPDATE tracks
@@ -935,8 +922,6 @@ def persist_suno_update(connection, update, schedule_background=True):
             (update["status"], update.get("title"), json.dumps(update["provider_response"]), track["id"]),
         )
     elif audio_url:
-        # Write the remote audio URL into the DB so clients can see it
-        # immediately and then fetch a local copy in background.
         connection.execute(
             """
             UPDATE tracks
@@ -946,8 +931,6 @@ def persist_suno_update(connection, update, schedule_background=True):
             (update["status"], update.get("title"), json.dumps(update["provider_response"]), track["id"]),
         )
 
-        # Schedule background download if requested and the URL is external
-        # (not a local /audio/ path).
         if schedule_background and not str(audio_url).startswith(AUDIO_URL_PATH):
             # Start a daemon thread to download and save the audio file.
             threading.Thread(
@@ -956,7 +939,6 @@ def persist_suno_update(connection, update, schedule_background=True):
                 daemon=True,
             ).start()
     else:
-        # No audio URL available; just update provider fields.
         connection.execute(
             """
             UPDATE tracks
@@ -980,15 +962,10 @@ def _background_download_and_persist(track_id, task_id, audio_url):
         local_path = download_audio_file(audio_url, task_id, track_id)
         local_audio_url = f"{AUDIO_URL_PATH}/{local_path.name}"
     except ProviderError:
-        # If download fails, keep the remote URL so the client can still
-        # stream directly from the provider.
         local_audio_url = audio_url
 
     try:
         with db() as connection:
-            # Update the track to point to the local copy (or the remote
-            # URL on failure). Preserve the provider status; set a simple
-            # finalized status if a local copy exists.
             new_status = "COMPLETED" if str(local_audio_url).startswith(AUDIO_URL_PATH) else "AVAILABLE"
             connection.execute(
                 """
@@ -998,12 +975,10 @@ def _background_download_and_persist(track_id, task_id, audio_url):
                 """,
                 (local_audio_url, new_status, json.dumps({}), track_id),
             )
-            # Touch session updated_at
             row = connection.execute("SELECT session_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
             if row:
                 connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), row["session_id"]))
     except Exception:
-        # Swallow any DB errors in the background thread to avoid crashing.
         pass
 
 
@@ -1112,7 +1087,6 @@ def handle_api(environ, start_response, path, method):
             return json_response(start_response, HTTPStatus.OK, {"captcha": challenge})
 
         if path == "/api/verify-email":
-            # Support GET verification via link: /api/verify-email?token=...
             qs = parse_qs(environ.get("QUERY_STRING", "") or "")
             token = (qs.get("token") or [None])[0]
             if not token:
@@ -1175,7 +1149,6 @@ def handle_api(environ, start_response, path, method):
             with db() as connection:
                 user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
                 if not user:
-                    # Don't reveal if email exists for security
                     return json_response(start_response, HTTPStatus.OK, {"message": "If an account exists with that email, a password reset link has been sent."})
                 reset_token = secrets.token_urlsafe(24)
                 reset_expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
@@ -1229,7 +1202,6 @@ def handle_api(environ, start_response, path, method):
                 except sqlite3.IntegrityError:
                     raise ValueError("An account with that email already exists.")
                 user = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-            # Generate verification token, store it, and send email
             token = secrets.token_urlsafe(24)
             with db() as connection:
                 connection.execute(
@@ -1310,10 +1282,7 @@ def handle_api(environ, start_response, path, method):
                 threading.Thread(target=send_verification_email, args=(updates["email"], verification_token, email_name), daemon=True).start()
             return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(updated), "message": "Email changed; verification is required for the new address."})
 
-        # Callback endpoint removed: now using polling via /api/tracks/{id}/refresh
         if path == "/api/suno/callback" and method == "POST":
-            # Deprecated: Suno API now uses polling instead of callbacks.
-            # This endpoint is kept for backward compatibility but is no longer used.
             return json_response(start_response, HTTPStatus.GONE, {"error": "Callback-based updates are deprecated. Use polling via /api/tracks/{id}/refresh instead."})
 
         if path.startswith("/api/tracks/") and method == "GET":
@@ -1342,12 +1311,8 @@ def handle_api(environ, start_response, path, method):
                         if time_since_last_poll.total_seconds() >= MIN_POLL_INTERVAL_SECONDS:
                             update = poll_suno_task(track["provider_task_id"])
                             update["task_id"] = track["provider_task_id"]
-                            # Persist update but do not schedule a background download yet;
-                            # we'll perform a blocking download here so the refresh call
-                            # returns a local server audio URL once available.
                             persist_suno_update(connection, update, schedule_background=True)
 
-                            # Re-fetch the track to inspect current provider status and audio_url
                             refreshed = connection.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
                             try:
                                 provider_status = (refreshed["status"] or "").upper()
@@ -1356,9 +1321,6 @@ def handle_api(environ, start_response, path, method):
                                 provider_status = ""
                                 audio_url = None
 
-                            # If the provider has reached a terminal status and gave an
-                            # external audio URL, download it synchronously and update
-                            # the DB to point to the local copy before returning.
                             if is_suno_terminal_status(provider_status) and audio_url and not str(audio_url).startswith(AUDIO_URL_PATH):
                                 try:
                                     local_path = download_audio_file(audio_url, refreshed["provider_task_id"], refreshed["id"])
@@ -1373,8 +1335,6 @@ def handle_api(environ, start_response, path, method):
                                     )
                                     connection.execute("UPDATE healing_sessions SET updated_at = ? WHERE id = ?", (iso_now(), refreshed["session_id"]))
                                 except ProviderError:
-                                    # If synchronous download fails, fall back to scheduling
-                                    # a background download so it can be retried asynchronously.
                                     threading.Thread(
                                         target=_background_download_and_persist,
                                         args=(refreshed["id"], update["task_id"], audio_url),
@@ -1441,7 +1401,6 @@ def handle_api(environ, start_response, path, method):
             if not isinstance(ids, list) or not ids:
                 raise ValueError("No session ids provided for bulk delete.")
             with db() as connection:
-                # Only delete sessions owned by user
                 connection.execute(
                     f"DELETE FROM healing_sessions WHERE user_id = ? AND id IN ({','.join('?' for _ in ids)})",
                     (user["id"],) + tuple(ids),
@@ -1475,7 +1434,6 @@ def handle_api(environ, start_response, path, method):
                         if folder_id is None:
                             updates["folder_id"] = None
                         else:
-                            # ensure folder belongs to user
                             with db() as connection:
                                 row = connection.execute("SELECT id FROM folders WHERE id = ? AND user_id = ?", (folder_id, user["id"])) .fetchone()
                             if not row:
@@ -1588,11 +1546,9 @@ def handle_api(environ, start_response, path, method):
                     if not isinstance(ids, list) or not ids:
                         raise ValueError("No session ids provided.")
                     with db() as connection:
-                        # ensure folder exists and belongs to user
                         row = connection.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, user["id"])) .fetchone()
                         if not row:
                             return json_response(start_response, HTTPStatus.NOT_FOUND, {"error": "Folder not found."})
-                        # update sessions
                         connection.execute(
                             f"UPDATE healing_sessions SET folder_id = ? WHERE user_id = ? AND id IN ({','.join('?' for _ in ids)})",
                             (folder_id, user["id"]) + tuple(ids),
@@ -1609,26 +1565,19 @@ def handle_api(environ, start_response, path, method):
 
 
 def serve_static(environ, start_response, path):
-    # Serve files from the main site root by default, but allow a dedicated
-    # `player/` subtree to be served from ROOT/player when the request path
-    # begins with `/player`.
     blocked_parts = {"data", "__pycache__"}
 
-    # Handle the special /player and /player/ cases and any files under /player/
     if path == "/player" or path == "/player/" or path.startswith("/player/"):
         base = (ROOT / "player").resolve()
-        # compute the relative path inside the player dir
         rel = path[len("/player") :]
         safe_rel = "index.html" if rel in ("", "/") else rel.lstrip("/")
         file_path = (base / safe_rel).resolve()
-        # Ensure the resolved file is within the player directory
         if not str(file_path).startswith(str(base)) or not file_path.is_file():
             file_path = base / "index.html"
     else:
         safe_path = "index.html" if path == "/" else path.lstrip("/")
         file_path = (ROOT / safe_path).resolve()
 
-    # Block access to sensitive directories and only allow common web assets
     is_blocked = any(part in blocked_parts for part in file_path.relative_to(ROOT).parts) if str(file_path).startswith(str(ROOT)) else True
     is_public_asset = file_path.suffix in MIME_TYPES
     if is_blocked or not is_public_asset or not str(file_path).startswith(str(ROOT)) or not file_path.is_file():
@@ -1671,7 +1620,6 @@ def serve_audio(environ, start_response, path):
     if not range_header:
         return send_full()
 
-    # Parse Range header like: "bytes=START-" or "bytes=START-END"
     try:
         unit, ranges = range_header.split("=", 1)
         if unit.strip() != "bytes":
@@ -1683,9 +1631,7 @@ def serve_audio(environ, start_response, path):
         return send_full()
 
     if start is None and end is not None:
-        # suffix-byte-range-spec: last `end` bytes
         if end == 0:
-            # invalid
             start = 0
         else:
             start = max(0, file_size - end)
@@ -1695,7 +1641,6 @@ def serve_audio(environ, start_response, path):
     if end is None or end >= file_size:
         end = file_size - 1
     if start > end or start < 0 or end < 0:
-        # Range Not Satisfiable
         headers = [("Content-Range", f"bytes */{file_size}"), ("Content-Type", "text/plain; charset=utf-8")]
         start_response(f"{HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value} {HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE.phrase}", headers)
         return [b"Requested Range Not Satisfiable"]
