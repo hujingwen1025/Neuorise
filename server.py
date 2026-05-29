@@ -402,7 +402,7 @@ def send_reset_password_email(to_email, reset_url, name=None):
                 server.starttls()
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
-    except Exception as e:
+    except:
         pass
 
 def send_verification_email(to_email, token, name=None):
@@ -457,7 +457,7 @@ def send_verification_email(to_email, token, name=None):
                     pass
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
-    except Exception as e:
+    except:
         pass
 
 def clear_session_cookie(environ):
