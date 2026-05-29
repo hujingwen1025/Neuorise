@@ -2,6 +2,8 @@
 
 A production-shaped full-stack app for adaptive therapeutic music generation.
 
+## https://neuorise.com
+
 ## Features
 
 - SQLite storage for users, auth sessions, surveys, generated tracks, and feedback
