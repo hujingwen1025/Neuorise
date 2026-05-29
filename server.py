@@ -403,7 +403,7 @@ def send_reset_password_email(to_email, reset_url, name=None):
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
     except Exception as e:
-        print(f"Error sending reset password email to {to_email}: {e}")
+        pass
 
 def send_verification_email(to_email, token, name=None):
     """Send an email with a verification link using SMTP settings from environment."""
@@ -412,7 +412,6 @@ def send_verification_email(to_email, token, name=None):
     smtp_account = os.environ.get("SMTP_ACCOUNT")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     if not smtp_server or not smtp_port or not smtp_account or not smtp_password:
-        print("SMTP settings incomplete; skipping verification email send")
         return
 
     site_url = os.environ.get("SITE_URL")
@@ -458,10 +457,8 @@ def send_verification_email(to_email, token, name=None):
                     pass
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
-        print(f"Sent verification email to {to_email}")
     except Exception as e:
-        print(f"Failed to send verification email to {to_email}: {e}")
-
+        pass
 
 def clear_session_cookie(environ):
     token = get_cookie(environ, SESSION_COOKIE)
