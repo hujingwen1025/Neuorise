@@ -211,9 +211,6 @@ function setupAuthDialog() {
         const resp = await api("/api/forgot-password", { method: "POST", body: { ...formData, email } });
         setMessage("#forgotPasswordMessage", resp.message || "Password reset link sent. Check your email.", "neutral");
         forgotPasswordForm.reset();
-        window.setTimeout(() => {
-          forgotPasswordDialog.close();
-        }, 2000);
       } catch (err) {
         setMessage("#forgotPasswordMessage", err.message, "error");
       }
