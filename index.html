@@ -151,6 +151,11 @@
           Email
           <input name="email" type="email" autocomplete="email" required />
         </label>
+        <cap-widget
+          id="forgotPasswordCaptcha"
+          required
+          data-cap-api-endpoint="/cap/"
+        ></cap-widget>
         <button class="solid-button" type="submit">Send reset link</button>
         <p class="form-message" id="forgotPasswordMessage"></p>
         <button type="button" id="backToLoginButton" class="ghost-button">Back to login</button>

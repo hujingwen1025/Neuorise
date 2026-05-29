@@ -393,11 +393,12 @@ def send_reset_password_email(to_email, reset_url, name=None):
         msg.add_alternative(html, subtype="html")
 
         if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=HTTP_TIMEOUT_SECONDS) as server:
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
         else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=HTTP_TIMEOUT_SECONDS) as server:
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+                server.ehlo()
                 server.starttls()
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
@@ -1143,6 +1144,7 @@ def handle_api(environ, start_response, path, method):
 
         if path == "/api/forgot-password" and method == "POST":
             payload = read_json(environ)
+            validate_captcha(environ, payload)
             email = (payload.get("email") or "").strip().lower()
             if not email:
                 raise ValueError("Email is required.")

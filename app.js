@@ -196,14 +196,19 @@ function setupAuthDialog() {
   if (forgotPasswordDialog && forgotPasswordForm) {
     forgotPasswordForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const email = (forgotPasswordForm.elements.email.value || "").trim().toLowerCase();
+      const formData = Object.fromEntries(new FormData(forgotPasswordForm).entries());
+      const email = (formData.email || "").trim().toLowerCase();
       if (!email) {
         setMessage("#forgotPasswordMessage", "Please enter your email.", "error");
         return;
       }
+      if (!formData["cap-token"]) {
+        setMessage("#forgotPasswordMessage", "Please complete the captcha.", "error");
+        return;
+      }
       setMessage("#forgotPasswordMessage", "Sending password reset link...", "neutral");
       try {
-        const resp = await api("/api/forgot-password", { method: "POST", body: { email } });
+        const resp = await api("/api/forgot-password", { method: "POST", body: { ...formData, email } });
         setMessage("#forgotPasswordMessage", resp.message || "Password reset link sent. Check your email.", "neutral");
         forgotPasswordForm.reset();
         window.setTimeout(() => {
