@@ -172,6 +172,27 @@ nav a:hover {
   color: var(--ink);
 }
 
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  margin: 0;
+  text-decoration: underline;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  transform: none;
+  text-decoration: none;
+}
+
 .solid-button:hover,
 .ghost-button:hover,
 .icon-button:hover,
@@ -844,6 +865,8 @@ pre {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
 
 .form-message[data-tone="error"] {

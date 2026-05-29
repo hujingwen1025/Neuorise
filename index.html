@@ -135,6 +135,43 @@
         ></cap-widget><br><br>
         <button class="solid-button" type="submit">Continue</button>
         <p class="form-message" id="authMessage"></p>
+        <div class="auth-extras">
+          <button type="button" id="resendVerificationButton" class="ghost-button hidden">Resend verification email</button>
+          <button type="button" id="forgotPasswordLinkLogin" class="text-button">Forgot password?</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="forgotPasswordDialog">
+      <form method="dialog" class="auth-card" id="forgotPasswordForm">
+        <button type="button" class="close-button" aria-label="Close">x</button>
+        <p class="eyebrow">Password reset</p>
+        <h2>Recover your password</h2>
+        <label>
+          Email
+          <input name="email" type="email" autocomplete="email" required />
+        </label>
+        <button class="solid-button" type="submit">Send reset link</button>
+        <p class="form-message" id="forgotPasswordMessage"></p>
+        <button type="button" id="backToLoginButton" class="ghost-button">Back to login</button>
+      </form>
+    </dialog>
+
+    <dialog id="resetPasswordDialog">
+      <form method="dialog" class="auth-card" id="resetPasswordForm">
+        <button type="button" class="close-button" aria-label="Close">x</button>
+        <p class="eyebrow">Password reset</p>
+        <h2>Set new password</h2>
+        <label>
+          New Password
+          <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+        </label>
+        <label>
+          Confirm Password
+          <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+        </label>
+        <button class="solid-button" type="submit">Reset password</button>
+        <p class="form-message" id="resetPasswordMessage"></p>
       </form>
     </dialog>
 

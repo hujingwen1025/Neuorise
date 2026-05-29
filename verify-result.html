@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Neuorise | Profile</title>
+    <title>Neuorise | Email Verification</title>
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="shortcut icon" href="/logo.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body data-page="profile">
+  <body data-page="verify-result">
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="Neuorise home">
@@ -19,7 +19,8 @@
           <a href="/survey.html">Survey</a>
           <a href="/sessions.html">Sessions</a>
         </nav>
-        <div class="auth-actions hidden"></div>
+        <div class="auth-actions">
+        </div>
         <div class="profile-chip hidden">
           <span id="profileInitials">N</span>
           <button class="ghost-button" id="logoutButton">Log out</button>
@@ -29,41 +30,12 @@
       <main>
         <section class="workspace">
           <div class="section-heading">
-            <p class="eyebrow">Profile</p>
-            <h1 class="page-title">Update your account</h1>
-            <p>
-              Change your name, email, or password anytime. Your existing session
-              data remains saved to your account.
-            </p>
+            <p class="eyebrow">Email verification</p>
+            <h1 class="page-title" id="verifyTitle">Verifying your email...</h1>
+            <p id="verifyMessage">Please wait while we confirm your email address.</p>
           </div>
-
-          <form class="auth-card" id="profileForm">
-            <label>
-              Name
-              <input name="name" type="text" autocomplete="name" required />
-            </label>
-
-            <label>
-              Email
-              <input name="email" type="email" autocomplete="email" required />
-            </label>
-
-            <label>
-              New password
-              <input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="Leave blank to keep current password" />
-            </label>
-
-            <button class="solid-button" type="submit">Save changes</button>
-            <p class="form-message" id="profileMessage"></p>
-            <p class="form-note" id="emailStatus"></p>
-            <button type="button" id="resendProfileVerificationButton" class="ghost-button hidden">Resend verification email</button>
-          </form>
-
-          <div class="danger-zone" style="margin-top: 3rem; padding: 1.5rem; border: 1px solid #e9806e; border-radius: 0.5rem; background: rgba(233, 128, 110, 0.05);">
-            <h2 style="font-size: 1rem; color: #e9806e; margin-top: 0;">Danger zone</h2>
-            <p style="margin-bottom: 1rem; color: #666;">Permanently delete your account and all associated data. This action cannot be undone.</p>
-            <button type="button" id="deleteAccountButton" class="ghost-button" style="border-color: #e9806e; color: #e9806e;">Delete my account</button>
-            <p class="form-message" id="deleteMessage"></p>
+          <div class="verify-actions">
+            <a id="verifyActionButton" class="solid-button" href="/">Return to home</a>
           </div>
         </section>
       </main>

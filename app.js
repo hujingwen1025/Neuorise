@@ -108,7 +108,12 @@ function setupAuthDialog() {
   });
 
   const urlMode = new URLSearchParams(location.search).get("auth");
-  if (urlMode === "signup" || urlMode === "login") openAuth(urlMode);
+  const resetToken = new URLSearchParams(location.search).get("reset");
+  if (resetToken) {
+    openResetPassword(resetToken);
+  } else if (urlMode === "signup" || urlMode === "login") {
+    openAuth(urlMode);
+  }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -118,13 +123,32 @@ function setupAuthDialog() {
 
     try {
       const payload = await api(`/api/${mode}`, { method: "POST", body: formData });
-      appState.user = payload.user;
-      renderShell();
-      dialog.close();
-      form.reset();
-      if (page === "home") window.location.href = "/survey.html";
+      if (mode === "signup") {
+        setMessage("#authMessage", payload.message || "Verification email sent. Please check your inbox.", "neutral");
+        form.reset();
+        // keep dialog open so user can resend if needed
+        const resendBtn = $("#resendVerificationButton");
+        resendBtn?.classList.remove("hidden");
+        startResendCooldown(60);
+      } else {
+        // login
+        appState.user = payload.user;
+        renderShell();
+        dialog.close();
+        form.reset();
+        if (page === "home") window.location.href = "/survey.html";
+      }
     } catch (error) {
       setMessage("#authMessage", error.message, "error");
+      // if error suggests verification is required, show resend button
+      const text = String(error.message || "").toLowerCase();
+      if (text.includes("verify") || text.includes("verification")) {
+        $("#resendVerificationButton").classList.remove("hidden");
+      }
+      const waitMatch = text.match(/wait (\d+) seconds?/);
+      if (waitMatch) {
+        startResendCooldown(Number(waitMatch[1]));
+      }
     }
   });
 
@@ -133,7 +157,159 @@ function setupAuthDialog() {
     dialog.close();
     form.reset();
     setMessage("#authMessage", "", "neutral");
+    $("#resendVerificationButton")?.classList.add("hidden");
+    clearResendCooldown();
   });
+
+  const resendBtn = $("#resendVerificationButton");
+  resendBtn?.addEventListener("click", async () => {
+    const email = form.elements.email.value;
+    if (!email) {
+      setMessage("#authMessage", "Please enter your email to resend verification.", "error");
+      return;
+    }
+    setMessage("#authMessage", "Resending verification email...", "neutral");
+    try {
+      const resp = await api("/api/resend-verification", { method: "POST", body: { email } });
+      setMessage("#authMessage", resp.message || "Verification email resent.", "neutral");
+      startResendCooldown(60);
+    } catch (err) {
+      setMessage("#authMessage", err.message, "error");
+      const text = String(err.message || "").toLowerCase();
+      const waitMatch = text.match(/wait (\d+) seconds?/);
+      if (waitMatch) {
+        startResendCooldown(Number(waitMatch[1]));
+      }
+    }
+  });
+
+  const forgotPasswordLinkLogin = $("#forgotPasswordLinkLogin");
+  forgotPasswordLinkLogin?.addEventListener("click", (e) => {
+    e.preventDefault();
+    dialog.close();
+    $("#forgotPasswordDialog")?.showModal();
+  });
+
+  // Forgot password dialog
+  const forgotPasswordDialog = $("#forgotPasswordDialog");
+  const forgotPasswordForm = $("#forgotPasswordForm");
+  if (forgotPasswordDialog && forgotPasswordForm) {
+    forgotPasswordForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = (forgotPasswordForm.elements.email.value || "").trim().toLowerCase();
+      if (!email) {
+        setMessage("#forgotPasswordMessage", "Please enter your email.", "error");
+        return;
+      }
+      setMessage("#forgotPasswordMessage", "Sending password reset link...", "neutral");
+      try {
+        const resp = await api("/api/forgot-password", { method: "POST", body: { email } });
+        setMessage("#forgotPasswordMessage", resp.message || "Password reset link sent. Check your email.", "neutral");
+        forgotPasswordForm.reset();
+        window.setTimeout(() => {
+          forgotPasswordDialog.close();
+        }, 2000);
+      } catch (err) {
+        setMessage("#forgotPasswordMessage", err.message, "error");
+      }
+    });
+
+    const backToLoginButton = $("#backToLoginButton");
+    backToLoginButton?.addEventListener("click", (e) => {
+      e.preventDefault();
+      forgotPasswordDialog.close();
+      openAuth("login");
+    });
+
+    const closeForgotButton = forgotPasswordDialog.querySelector(".close-button");
+    closeForgotButton?.addEventListener("click", () => {
+      forgotPasswordDialog.close();
+      forgotPasswordForm.reset();
+      setMessage("#forgotPasswordMessage", "", "neutral");
+    });
+  }
+
+  // Reset password dialog
+  const resetPasswordDialog = $("#resetPasswordDialog");
+  const resetPasswordForm = $("#resetPasswordForm");
+  if (resetPasswordDialog && resetPasswordForm) {
+    resetPasswordForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const password = resetPasswordForm.elements.password.value || "";
+      const confirmPassword = resetPasswordForm.elements.confirmPassword.value || "";
+      const token = resetPasswordForm.dataset.token || "";
+
+      if (password !== confirmPassword) {
+        setMessage("#resetPasswordMessage", "Passwords do not match.", "error");
+        return;
+      }
+      if (password.length < 8) {
+        setMessage("#resetPasswordMessage", "Password must be at least 8 characters.", "error");
+        return;
+      }
+
+      setMessage("#resetPasswordMessage", "Resetting your password...", "neutral");
+      try {
+        const resp = await api("/api/reset-password", { method: "POST", body: { token, password } });
+        setMessage("#resetPasswordMessage", resp.message || "Password reset successfully. Redirecting to login...", "neutral");
+        resetPasswordForm.reset();
+        window.setTimeout(() => {
+          resetPasswordDialog.close();
+          openAuth("login");
+        }, 2000);
+      } catch (err) {
+        setMessage("#resetPasswordMessage", err.message, "error");
+      }
+    });
+
+    const closeResetButton = resetPasswordDialog.querySelector(".close-button");
+    closeResetButton?.addEventListener("click", () => {
+      resetPasswordDialog.close();
+      resetPasswordForm.reset();
+      setMessage("#resetPasswordMessage", "", "neutral");
+    });
+  }
+}
+
+function startResendCooldown(seconds, button = $("#resendVerificationButton")) {
+  const btn = button;
+  if (!btn) return;
+  clearResendCooldown(btn);
+  btn.disabled = true;
+  const defaultText = btn.dataset.defaultText || btn.textContent || "Resend verification email";
+  btn.dataset.defaultText = defaultText;
+  let remaining = seconds;
+  btn.textContent = `${defaultText} (${remaining}s)`;
+  const timer = window.setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearResendCooldown(btn);
+      return;
+    }
+    btn.textContent = `${defaultText} (${remaining}s)`;
+  }, 1000);
+  btn.dataset.resendTimer = String(timer);
+}
+
+function clearResendCooldown(button = $("#resendVerificationButton")) {
+  const btn = button;
+  if (!btn) return;
+  if (btn.dataset.resendTimer) {
+    clearInterval(Number(btn.dataset.resendTimer));
+    delete btn.dataset.resendTimer;
+  }
+  btn.disabled = false;
+  btn.textContent = btn.dataset.defaultText || "Resend verification email";
+}
+
+function openResetPassword(token) {
+  const dialog = $("#resetPasswordDialog");
+  const form = $("#resetPasswordForm");
+  if (!dialog || !form) return;
+  form.dataset.token = token;
+  setMessage("#resetPasswordMessage", "", "neutral");
+  form.reset();
+  dialog.showModal();
 }
 
 function openAuth(mode) {
@@ -145,7 +321,10 @@ function openAuth(mode) {
   $("#authTitle").textContent = mode === "signup" ? "Create your account" : "Log in";
   $("#authModeLabel").textContent = mode === "signup" ? "Begin saving sessions" : "Welcome back";
   form.elements.name.parentElement.classList.toggle("hidden", mode !== "signup");
+  $("#forgotPasswordLinkLogin")?.classList.toggle("hidden", mode !== "login");
   setMessage("#authMessage", "", "neutral");
+  $("#resendVerificationButton")?.classList.add("hidden");
+  form.reset();
   dialog.showModal();
 }
 
@@ -176,6 +355,32 @@ function setupProfileNavigation() {
   });
 }
 
+function setupVerifyResultPage() {
+  const title = $("#verifyTitle");
+  const message = $("#verifyMessage");
+  const actionButton = $("#verifyActionButton");
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get("status") || "success";
+  const rawMessage = params.get("message") || "Your email has been verified.";
+  const text = decodeURIComponent(rawMessage.replace(/\+/g, " "));
+
+  if (status === "success") {
+    if (title) title.textContent = "Email verified successfully.";
+    if (message) message.textContent = text;
+    if (actionButton) {
+      actionButton.textContent = "Go to dashboard";
+      actionButton.href = "/sessions.html";
+    }
+  } else {
+    if (title) title.textContent = "Email verification failed.";
+    if (message) message.textContent = text;
+    if (actionButton) {
+      actionButton.textContent = "Go to home";
+      actionButton.href = "/";
+    }
+  }
+}
+
 function setupProfilePage() {
   const form = $("#profileForm");
   if (!form) return;
@@ -183,10 +388,27 @@ function setupProfilePage() {
   const emailInput = form.elements.email;
   const message = $("#profileMessage");
 
+  const emailStatus = $("#emailStatus");
+  const resendProfileButton = $("#resendProfileVerificationButton");
+
+  function refreshEmailStatus() {
+    if (!appState.user || !emailStatus) return;
+    if (!appState.user.verified) {
+      emailStatus.textContent = "Your email address is not verified. Please verify to keep your account active.";
+      emailStatus.dataset.tone = "warning";
+      resendProfileButton?.classList.remove("hidden");
+    } else {
+      emailStatus.textContent = "Your email is verified.";
+      emailStatus.dataset.tone = "neutral";
+      resendProfileButton?.classList.add("hidden");
+    }
+  }
+
   if (appState.user) {
     if (nameInput) nameInput.value = appState.user.name || "";
     if (emailInput) emailInput.value = appState.user.email || "";
   }
+  refreshEmailStatus();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -197,10 +419,60 @@ function setupProfilePage() {
       const response = await api("/api/me", { method: "PATCH", body: payload });
       appState.user = response.user;
       renderShell();
-      setMessage("#profileMessage", "Profile updated successfully.", "neutral");
+      refreshEmailStatus();
+      setMessage("#profileMessage", response.message || "Profile updated successfully.", "neutral");
       form.password.value = "";
+      if (!appState.user.verified) {
+        resendProfileButton?.classList.remove("hidden");
+      }
     } catch (error) {
       setMessage("#profileMessage", error.message, "error");
+    }
+  });
+
+  resendProfileButton?.addEventListener("click", async () => {
+    const email = emailInput?.value?.trim().toLowerCase();
+    if (!email) {
+      setMessage("#profileMessage", "Please enter your email to resend verification.", "error");
+      return;
+    }
+    setMessage("#profileMessage", "Resending verification email...", "neutral");
+    try {
+      const resp = await api("/api/resend-verification", { method: "POST", body: { email } });
+      setMessage("#profileMessage", resp.message || "Verification email resent.", "neutral");
+      startResendCooldown(60, resendProfileButton);
+    } catch (err) {
+      setMessage("#profileMessage", err.message, "error");
+      const text = String(err.message || "").toLowerCase();
+      const waitMatch = text.match(/wait (\d+) seconds?/);
+      if (waitMatch) {
+        startResendCooldown(Number(waitMatch[1]), resendProfileButton);
+      }
+    }
+  });
+
+  const deleteAccountButton = $("#deleteAccountButton");
+  deleteAccountButton?.addEventListener("click", async () => {
+    const confirmed = confirm(
+      `Are you sure you want to delete your account? This will permanently remove all your data including sessions, tracks, and feedback.\n\nThis action cannot be undone.`
+    );
+    if (!confirmed) return;
+    const doubleConfirmed = prompt(
+      `To confirm, please type your email address: ${appState.user?.email || ""}`
+    );
+    if (doubleConfirmed !== appState.user?.email) {
+      setMessage("#deleteMessage", "Email did not match. Account deletion cancelled.", "error");
+      return;
+    }
+    setMessage("#deleteMessage", "Deleting your account...", "neutral");
+    try {
+      await api("/api/me", { method: "DELETE" });
+      setMessage("#deleteMessage", "Account deleted successfully. Redirecting...", "neutral");
+      window.setTimeout(() => {
+        window.location.href = "/";
+      }, 1500);
+    } catch (err) {
+      setMessage("#deleteMessage", err.message, "error");
     }
   });
 }
@@ -1011,3 +1283,4 @@ if (page === "survey") setupSurveyPage();
 if (page === "generation") setupGenerationPage();
 if (page === "feedback") setupFeedbackPage();
 if (page === "sessions") setupSessionsPage();
+if (page === "verify-result") setupVerifyResultPage();

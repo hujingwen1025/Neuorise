@@ -45,6 +45,32 @@ jobs:
             else
               echo "SUNO_APIKEY=${{ secrets.SUNO_APIKEY }}" >> .env
             fi
+            if grep -q '^SMTP_SERVER=' .env; then
+              sed -i 's|^SMTP_SERVER=.*|SMTP_SERVER=${{ secrets.SMTP_SERVER }}|' .env
+            else
+              echo "SMTP_SERVER=${{ secrets.SMTP_SERVER }}" >> .env
+            fi
+            if grep -q '^SMTP_PORT=' .env; then
+              sed -i 's|^SMTP_PORT=.*|SMTP_PORT=${{ secrets.SMTP_PORT }}|' .env
+            else
+              echo "SMTP_PORT=${{ secrets.SMTP_PORT }}" >> .env
+            fi
+            if grep -q '^SMTP_ACCOUNT=' .env; then
+              sed -i 's|^SMTP_ACCOUNT=.*|SMTP_ACCOUNT=${{ secrets.SMTP_ACCOUNT }}|' .env
+            else
+              echo "SMTP_ACCOUNT=${{ secrets.SMTP_ACCOUNT }}" >> .env
+            fi
+            if grep -q '^SMTP_PASSWORD=' .env; then
+              sed -i 's|^SMTP_PASSWORD=.*|SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}|' .env
+            else
+              echo "SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}" >> .env
+            fi
+            if grep -q '^SITE_URL=' .env; then
+              sed -i 's|^SITE_URL=.*|SITE_URL=${{ secrets.SITE_URL }}|' .env
+            else
+              echo "SITE_URL=${{ secrets.SITE_URL }}" >> .env
+            fi
+            echo === API KEYS WRITTEN TO .env ===
             echo === STARTING SYSTEMCTL RESTART ===
             sudo systemctl restart neuorise_server
             echo === SYSTEMCTL RESTART FINISHED ===

@@ -8,6 +8,9 @@ import secrets
 import sqlite3
 import ssl
 import threading
+import smtplib
+from email.message import EmailMessage
+from urllib.parse import parse_qs
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -139,13 +142,17 @@ def init_db():
     with db() as connection:
         connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS users (
-              id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
-              email TEXT NOT NULL UNIQUE,
-              password_hash TEXT NOT NULL,
-              created_at TEXT NOT NULL
-            );
+                        CREATE TABLE IF NOT EXISTS users (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            email TEXT NOT NULL UNIQUE,
+                            password_hash TEXT NOT NULL,
+                            verified INTEGER NOT NULL DEFAULT 0,
+                            verification_token TEXT,
+                            verification_sent_at TEXT,
+                            verified_at TEXT,
+                            created_at TEXT NOT NULL
+                        );
 
             CREATE TABLE IF NOT EXISTS auth_sessions (
               id TEXT PRIMARY KEY,
@@ -207,6 +214,12 @@ def init_db():
         ensure_column(connection, "tracks", "provider_response_json", "TEXT")
         ensure_column(connection, "healing_sessions", "favorite", "INTEGER DEFAULT 0")
         ensure_column(connection, "healing_sessions", "folder_id", "INTEGER REFERENCES folders(id)")
+        ensure_column(connection, "users", "verified", "INTEGER DEFAULT 0")
+        ensure_column(connection, "users", "verification_token", "TEXT")
+        ensure_column(connection, "users", "verification_sent_at", "TEXT")
+        ensure_column(connection, "users", "verified_at", "TEXT")
+        ensure_column(connection, "users", "reset_token", "TEXT")
+        ensure_column(connection, "users", "reset_token_expires_at", "TEXT")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_tracks_provider_task ON tracks(provider_task_id)")
 
 
@@ -246,6 +259,27 @@ def json_response(start_response, status, payload, headers=None):
     return [body]
 
 
+def html_response(start_response, status, html, headers=None):
+    body = html.encode("utf-8")
+    response_headers = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ]
+    if headers:
+        response_headers.extend(headers)
+    start_response(f"{status.value} {status.phrase}", response_headers)
+    return [body]
+
+
+def redirect_response(start_response, location, headers=None):
+    response_headers = [("Location", location)]
+    if headers:
+        response_headers.extend(headers)
+    start_response(f"{HTTPStatus.FOUND.value} {HTTPStatus.FOUND.phrase}", response_headers)
+    return [b""]
+
+
 def read_json(environ):
     length = int(environ.get("CONTENT_LENGTH") or 0)
     if length == 0:
@@ -283,7 +317,12 @@ def get_cookie(environ, name):
 
 
 def serialize_user(row):
-    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "email": row["email"],
+        "verified": bool(row["verified"] if "verified" in row.keys() else False),
+    }
 
 
 def current_user(environ):
@@ -321,6 +360,107 @@ def create_session_cookie(user_id):
         "Set-Cookie",
         f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_DAYS * 24 * 60 * 60}",
     )
+
+
+def send_reset_password_email(to_email, reset_url, name=None):
+    """Send password reset email with clickable link."""
+    try:
+        smtp_server = os.environ.get("SMTP_SERVER")
+        smtp_port = int(os.environ.get("SMTP_PORT", "465"))
+        smtp_account = os.environ.get("SMTP_ACCOUNT")
+        smtp_password = os.environ.get("SMTP_PASSWORD")
+        if not all([smtp_server, smtp_account, smtp_password]):
+            return
+
+        display_name = name or to_email.split("@")[0]
+        msg = EmailMessage()
+        msg["From"] = smtp_account
+        msg["To"] = to_email
+        msg["Subject"] = "Reset your Neuorise password"
+        msg.set_content(
+            f"Hello {display_name},\n\n"
+            f"Click the link below to reset your password:\n\n{reset_url}\n\n"
+            f"This link expires in 1 hour.\n\n"
+            f"If you didn't request this, please ignore this email."
+        )
+        html = f"""<html><body style='font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #333;'>
+          <p>Hello {display_name},</p>
+          <p>Click the link below to reset your password:</p>
+          <p><a href='{reset_url}' style='display: inline-block; padding: 10px 20px; background: #6366f1; color: white; text-decoration: none; border-radius: 4px;'>Reset Password</a></p>
+          <p>Or copy this link: <code>{reset_url}</code></p>
+          <p style='color: #999; font-size: 12px;'>This link expires in 1 hour.</p>
+          <p style='color: #999; font-size: 12px;'>If you didn't request this, please ignore this email.</p>
+        </body></html>"""
+        msg.add_alternative(html, subtype="html")
+
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=HTTP_TIMEOUT_SECONDS) as server:
+                server.login(smtp_account, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=HTTP_TIMEOUT_SECONDS) as server:
+                server.starttls()
+                server.login(smtp_account, smtp_password)
+                server.send_message(msg)
+    except Exception as e:
+        print(f"Error sending reset password email to {to_email}: {e}")
+
+def send_verification_email(to_email, token, name=None):
+    """Send an email with a verification link using SMTP settings from environment."""
+    smtp_server = os.environ.get("SMTP_SERVER")
+    smtp_port = int(os.environ.get("SMTP_PORT", "0") or 0)
+    smtp_account = os.environ.get("SMTP_ACCOUNT")
+    smtp_password = os.environ.get("SMTP_PASSWORD")
+    if not smtp_server or not smtp_port or not smtp_account or not smtp_password:
+        print("SMTP settings incomplete; skipping verification email send")
+        return
+
+    site_url = os.environ.get("SITE_URL")
+    if not site_url:
+        port = os.environ.get("PORT", "5173")
+        site_url = f"http://localhost:{port}"
+    site_url = site_url.rstrip("/")
+    verify_url = f"{site_url}/api/verify-email?token={token}"
+
+    subject = "Verify your Neuorise email"
+    friendly = name or "User"
+    text = f"Hi {friendly},\n\nPlease verify your email address by clicking the link below:\n\n{verify_url}\n\nIf you did not sign up, you can ignore this email.\n\nThanks,\nNeuorise Team"
+    html = f"""
+    <html>
+      <body>
+        <p>Hi {friendly},</p>
+        <p>Please verify your email address by clicking the link below:</p>
+        <p><a href=\"{verify_url}\">Verify your email</a></p>
+        <p>If you did not sign up, you can ignore this email.</p>
+        <p>Thanks,<br />Neuorise Team</p>
+      </body>
+    </html>
+    """
+
+    msg = EmailMessage()
+    msg["From"] = smtp_account
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
+
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                server.login(smtp_account, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                server.ehlo()
+                try:
+                    server.starttls()
+                except Exception:
+                    pass
+                server.login(smtp_account, smtp_password)
+                server.send_message(msg)
+        print(f"Sent verification email to {to_email}")
+    except Exception as e:
+        print(f"Failed to send verification email to {to_email}: {e}")
 
 
 def clear_session_cookie(environ):
@@ -974,6 +1114,106 @@ def handle_api(environ, start_response, path, method):
             challenge = cap_server.create_challenge()
             return json_response(start_response, HTTPStatus.OK, {"captcha": challenge})
 
+        if path == "/api/verify-email":
+            # Support GET verification via link: /api/verify-email?token=...
+            qs = parse_qs(environ.get("QUERY_STRING", "") or "")
+            token = (qs.get("token") or [None])[0]
+            if not token:
+                url = "/verify-result.html?status=error&message=Verification+token+is+missing"
+                return redirect_response(start_response, url)
+            with db() as connection:
+                row = connection.execute("SELECT * FROM users WHERE verification_token = ?", (token,)).fetchone()
+                if not row:
+                    url = "/verify-result.html?status=error&message=Invalid+or+already+used+verification+link"
+                    return redirect_response(start_response, url)
+                connection.execute(
+                    "UPDATE users SET verified = 1, verified_at = ?, verification_token = NULL, verification_sent_at = NULL WHERE id = ?",
+                    (iso_now(), row["id"]),
+                )
+                user = connection.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+            url = "/verify-result.html?status=success&message=Email+verified+successfully"
+            return redirect_response(start_response, url, [create_session_cookie(user["id"])])
+
+        if path == "/api/resend-verification" and method == "POST":
+            payload = read_json(environ)
+            email = (payload.get("email") or "").strip().lower()
+            if not email:
+                raise ValueError("Email is required.")
+            with db() as connection:
+                row = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+                if not row:
+                    raise ValueError("No account found with that email.")
+                if row["verified"] if "verified" in row.keys() else 0:
+                    raise ValueError("Account already verified.")
+                last_sent = row["verification_sent_at"]
+                if last_sent:
+                    try:
+                        last_sent_dt = datetime.fromisoformat(last_sent)
+                    except ValueError:
+                        last_sent_dt = None
+                    if last_sent_dt:
+                        elapsed = utc_now() - last_sent_dt
+                        if elapsed.total_seconds() < 60:
+                            remaining = int(60 - elapsed.total_seconds())
+                            raise ValueError(f"Please wait {remaining} seconds before resending verification email.")
+                token = secrets.token_urlsafe(24)
+                connection.execute(
+                    "UPDATE users SET verification_token = ?, verification_sent_at = ? WHERE id = ?",
+                    (token, iso_now(), row["id"]),
+                )
+            threading.Thread(target=send_verification_email, args=(email, token, row["name"]), daemon=True).start()
+            return json_response(start_response, HTTPStatus.OK, {"message": "Verification email resent. Please check your inbox."})
+
+        if path == "/api/me" and method == "DELETE":
+            user = require_user(environ)
+            with db() as connection:
+                connection.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+            return json_response(start_response, HTTPStatus.OK, {"ok": True, "message": "Account deleted."})
+
+        if path == "/api/forgot-password" and method == "POST":
+            payload = read_json(environ)
+            email = (payload.get("email") or "").strip().lower()
+            if not email:
+                raise ValueError("Email is required.")
+            with db() as connection:
+                user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+                if not user:
+                    # Don't reveal if email exists for security
+                    return json_response(start_response, HTTPStatus.OK, {"message": "If an account exists with that email, a password reset link has been sent."})
+                reset_token = secrets.token_urlsafe(24)
+                reset_expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+                connection.execute(
+                    "UPDATE users SET reset_token = ?, reset_token_expires_at = ? WHERE id = ?",
+                    (reset_token, reset_expires, user["id"])
+                )
+            reset_url = f"{os.environ.get('SITE_URL', 'http://localhost:8000')}/?reset={reset_token}"
+            threading.Thread(
+                target=send_reset_password_email,
+                args=(email, reset_url, user["name"]),
+                daemon=True
+            ).start()
+            return json_response(start_response, HTTPStatus.OK, {"message": "If an account exists with that email, a password reset link has been sent."})
+
+        if path == "/api/reset-password" and method == "POST":
+            payload = read_json(environ)
+            token = (payload.get("token") or "").strip()
+            password = payload.get("password") or ""
+            if not token or len(password) < 8:
+                raise ValueError("Valid token and 8+ character password are required.")
+            with db() as connection:
+                user = connection.execute(
+                    "SELECT * FROM users WHERE reset_token = ? AND reset_token_expires_at > ?",
+                    (token, datetime.now(timezone.utc).isoformat())
+                ).fetchone()
+                if not user:
+                    raise ValueError("Invalid or expired password reset link.")
+                password_hash = hash_password(password)
+                connection.execute(
+                    "UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires_at = NULL WHERE id = ?",
+                    (password_hash, user["id"])
+                )
+            return json_response(start_response, HTTPStatus.OK, {"message": "Password reset successfully. Please log in with your new password."})
+
         if path == "/api/signup" and method == "POST":
             payload = read_json(environ)
             validate_captcha(environ, payload)
@@ -992,7 +1232,15 @@ def handle_api(environ, start_response, path, method):
                 except sqlite3.IntegrityError:
                     raise ValueError("An account with that email already exists.")
                 user = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-            return json_response(start_response, HTTPStatus.CREATED, {"user": serialize_user(user)}, [create_session_cookie(user["id"])])
+            # Generate verification token, store it, and send email
+            token = secrets.token_urlsafe(24)
+            with db() as connection:
+                connection.execute(
+                    "UPDATE users SET verification_token = ?, verification_sent_at = ? WHERE id = ?",
+                    (token, iso_now(), user["id"]),
+                )
+            threading.Thread(target=send_verification_email, args=(email, token, name), daemon=True).start()
+            return json_response(start_response, HTTPStatus.CREATED, {"user": serialize_user(user), "message": "Verification email sent. Please check your inbox."})
 
         if path == "/api/login" and method == "POST":
             payload = read_json(environ)
@@ -1003,6 +1251,8 @@ def handle_api(environ, start_response, path, method):
                 user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
             if not user or not verify_password(password, user["password_hash"]):
                 raise ValueError("Invalid email or password.")
+            if not (user["verified"] if "verified" in user.keys() else 0):
+                raise ValueError("Please verify your email address before logging in.")
             return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(user)}, [create_session_cookie(user["id"])])
 
         if path == "/api/logout" and method == "POST":
@@ -1023,11 +1273,22 @@ def handle_api(environ, start_response, path, method):
                     raise ValueError("Name cannot be empty.")
                 updates["name"] = name
             email = payload.get("email")
+            email_changed = False
+            verification_token = None
             if email is not None:
                 email = email.strip().lower()
                 if not email:
                     raise ValueError("Email cannot be empty.")
-                updates["email"] = email
+                if email != user["email"]:
+                    email_changed = True
+                    updates["email"] = email
+                    updates["verified"] = 0
+                    verification_token = secrets.token_urlsafe(24)
+                    updates["verification_token"] = verification_token
+                    updates["verification_sent_at"] = iso_now()
+                    updates["verified_at"] = None
+                else:
+                    updates["email"] = email
             password = payload.get("password")
             if password:
                 if len(password) < 8:
@@ -1036,7 +1297,7 @@ def handle_api(environ, start_response, path, method):
             if not updates:
                 raise ValueError("No profile changes were submitted.")
             with db() as connection:
-                if "email" in updates:
+                if "email" in updates and email_changed:
                     existing = connection.execute(
                         "SELECT id FROM users WHERE email = ? AND id != ?",
                         (updates["email"], user["id"]),
@@ -1047,7 +1308,10 @@ def handle_api(environ, start_response, path, method):
                 params = list(updates.values()) + [user["id"]]
                 connection.execute(f"UPDATE users SET {set_clause} WHERE id = ?", params)
                 updated = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-            return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(updated)})
+            if email_changed:
+                email_name = updates.get("name") or user["name"]
+                threading.Thread(target=send_verification_email, args=(updates["email"], verification_token, email_name), daemon=True).start()
+            return json_response(start_response, HTTPStatus.OK, {"user": serialize_user(updated), "message": "Email changed; verification is required for the new address."})
 
         # Callback endpoint removed: now using polling via /api/tracks/{id}/refresh
         if path == "/api/suno/callback" and method == "POST":
