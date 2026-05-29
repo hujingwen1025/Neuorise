@@ -393,19 +393,17 @@ def send_reset_password_email(to_email, reset_url, name=None):
         msg.add_alternative(html, subtype="html")
 
         if smtp_port == 465:
-            print('using ssl')
             with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
         else:
-            print('using tls')
             with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
                 server.ehlo()
                 server.starttls()
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
-    except Exception as e:
-        print(f"Error during sending reset password email: {e}")
+    except:
+        pass
 
 def send_verification_email(to_email, token, name=None):
     """Send an email with a verification link using SMTP settings from environment."""
