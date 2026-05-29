@@ -392,7 +392,7 @@ def send_reset_password_email(to_email, reset_url, name=None):
         </body></html>"""
         msg.add_alternative(html, subtype="html")
 
-        if smtp_port == 465:
+        if '465' in str(smtp_port):
             with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
                 server.login(smtp_account, smtp_password)
                 server.send_message(msg)
