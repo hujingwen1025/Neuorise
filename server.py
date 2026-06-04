@@ -762,6 +762,8 @@ def call_suno_api(plan):
         request_payload,
     )
     if result.get("code") != 200:
+        if str(result.get('msg') or result) == "model error":
+            return call_suno_api(plan)
         raise ProviderError(f"Suno generation failed: {result.get('msg') or result}")
     task_id = (result.get("data") or {}).get("taskId")
     if not task_id:

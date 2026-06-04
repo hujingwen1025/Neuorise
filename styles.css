@@ -629,6 +629,29 @@ pre {
   color: var(--muted);
 }
 
+.timeNoticeDiv {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 18px;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(146, 216, 196, 0.14);
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.3;
+  justify-content: center;
+  animation: float-soft 6s ease-in-out infinite;
+}
+
+.timeNoticeLabel {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+
 /* Round the iframe itself for browsers that render iframe backgrounds */
 #playerIframe {
   border-radius: 28px;
