@@ -361,6 +361,33 @@ h3 {
   margin-bottom: 28px;
 }
 
+.content-page {
+  display: grid;
+  gap: 30px;
+  padding-bottom: 32px;
+}
+
+.policy-copy {
+  padding: 34px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+}
+
+.policy-copy h2 {
+  margin-top: 24px;
+}
+
+.policy-copy ul {
+  padding-left: 1.3rem;
+}
+
+.policy-copy li {
+  margin-bottom: 0.75rem;
+}
+
 .intake-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -951,6 +978,32 @@ dialog::backdrop {
   position: relative;
   padding: 28px;
   background: var(--surface);
+}
+
+label.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0 24px;
+  padding-right: 12px;
+  flex-wrap: nowrap;
+}
+
+label.checkbox-field .checkbox-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.925rem;
+}
+
+label.checkbox-field a {
+  color: var(--green);
+}
+
+label.checkbox-field a:hover {
+  text-decoration: underline;
 }
 
 .close-button {
