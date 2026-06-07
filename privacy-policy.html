@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuorise | Privacy Policy</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" href="/logo.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="privacy-policy">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Neuorise home">
+          <span class="brand-mark"></span>
+          <span>Neuorise</span>
+        </a>
+        <nav aria-label="Primary">
+          <a href="/">Home</a>
+          <a href="/survey.html">Generate</a>
+          <a href="/sessions.html">Sessions</a>
+        </nav>
+      </header>
+
+      <main class="content-page">
+        <section class="page-heading">
+          <p class="eyebrow">Privacy Policy</p>
+          <h1>Privacy Policy for Neuorise</h1>
+          <p><strong>Last Updated:</strong> Jun 7 2026</p>
+        </section>
+
+        <article class="policy-copy">
+          <p>At Neuorise, we take your privacy and data security with absolute seriousness. We believe your mental health data and physiological parameters belong entirely to you. This Privacy Policy details exactly what data we collect, how it is stored, and the strict boundaries we place around it.</p>
+
+          <h2>1. No Additional Data Collection</h2>
+          <p><strong>We do not collect any personal or tracking data that you do not willingly and explicitly provide to us.</strong> Neuorise does not use silent background tracking, behavioral tracking scripts, or invasive advertising tracking.</p>
+
+          <h2>2. Information We Collect</h2>
+          <p>We only process data that is fundamental to providing you with the AI music healing service:</p>
+          <ul>
+            <li><strong>Account Credentials:</strong> Username, email address, and a securely hashed password (using PBKDF2) when you voluntarily register.</li>
+            <li><strong>Session Verification:</strong> Secure, server-side <code>HttpOnly</code> cookies strictly to keep you logged in.</li>
+            <li><strong>Wellness & Physiological Inputs:</strong> Your answers to our short 5–7 question mood questionnaires, alongside basic physiological parameters (such as heart rate or respiratory rate) that you manually provide or consent to measure.</li>
+            <li><strong>Feedback Data:</strong> Ratings (1-5 stars) and custom notes you submit to adjust the music generation loop.</li>
+          </ul>
+
+          <h2>3. Strict Database Boundaries & No Unauthorized Access</h2>
+          <p><strong>Your information will never be accessed or transferred off the Neuorise database without your explicit action, explicit knowledge, or direct command.</strong> All user state histories, generated tracks, and questionnaire logs are isolated inside our secure SQLite database container (<code>data/neuorise.sqlite3</code>). No backend scripts are authorized to transfer, export, or leak this data externally without your specific trigger (e.g., clicking a button to explicitly export your profile).</p>
+
+          <h2>4. absolute Zero-Sale Policy (No Third-Party Data Selling)</h2>
+          <p><strong>We do not sell, rent, trade, or monetize your personal data, questionnaires, physiological inputs, or feedback to third-party vendors, data brokers, or advertisers in any way or under any circumstances.</strong> Your information stays strictly within Neuorise.</p>
+
+          <h2>5. Third-Party API Processors</h2>
+          <p>To generate your custom healing music, Neuorise securely communicates with external AI services on the server-side:</p>
+          <ul>
+            <li><strong>Gemini API:</strong> Processes your survey answers anonymously to formulate music style parameters.</li>
+            <li><strong>Suno API:</strong> Receives style prompts to generate the therapeutic audio file.</li>
+          </ul>
+          <p>These data exchanges happen entirely via server-side variables. <strong>We never send your personal account identifiers, emails, or unhashed passwords to these APIs.</strong></p>
+
+          <h2>6. Data Security</h2>
+          <p>We implement industry-standard practices to protect your information:</p>
+          <ul>
+            <li>Passwords are protected using secure PBKDF2 hashing.</li>
+            <li>Authentication sessions are protected via <code>HttpOnly</code> cookies to mitigate cross-site scripting (XSS) risks.</li>
+            <li>API credentials remain completely hidden in the server-side environment variables.</li>
+          </ul>
+
+          <h2>7. Your Rights (Data Deletion)</h2>
+          <p>Because you have full control over your information, you have the right to review, modify, or permanently delete your account and its entire associated generation history at any time. Once deleted, your records are completely scrubbed from our SQLite database.</p>
+
+          <h2>8. Contact Us</h2>
+          <p>If you have any questions or concerns regarding your privacy on Neuorise, you can reach out directly to: <a href="mailto:jingwen.hu@exabyte.org.cn">jingwen.hu@exabyte.org.cn</a></p>
+        </article>
+      </main>
+
+      <footer class="site-footer" aria-label="Site footer">
+        <div class="footer-inner">
+          <div class="footer-section">
+            <p class="footer-brand">Neuorise</p>
+            <p>Created by 傅辅航 (Fuhang Fu) and 胡竞文 (Jingwen Hu).</p>
+          </div>
+          <div class="footer-section">
+            <p class="footer-heading">Quick navigation</p>
+            <nav class="footer-nav" aria-label="Footer navigation">
+              <a href="/">Home</a>
+              <a href="/survey.html">Generate</a>
+              <a href="/sessions.html">Sessions</a>
+              <a href="/profile.html">Profile</a>
+              <a href="/privacy-policy.html">Privacy Policy</a>
+              <a href="/terms-of-service.html">Terms of Service</a>
+            </nav>
+          </div>
+          <div class="footer-section">
+            <p class="footer-heading">Contact</p>
+            <p><a href="mailto:jingwen.hu@exabyte.org.cn">jingwen.hu@exabyte.org.cn</a></p>
+            <p><a href="mailto:fufh.franky2025@outlook.com">fufh.franky2025@outlook.com</a></p>
+            <p><a href="https://github.com/hujingwen1025/Neuorise" target="_blank" rel="noopener noreferrer"><strong>Neuorise on GitHub</strong></a></p>
+            <p><a href="https://forms.office.com/r/q8ueMCaSxT" target="_blank" rel="noopener noreferrer"><strong>Suggestion Box</strong></a></p>
+          </div>
+        </div>
+        <p class="footer-copy">&copy; 2026 Neuorise. All rights reserved.</p>
+      </footer>
+    </div>
+  </body>
+</html>

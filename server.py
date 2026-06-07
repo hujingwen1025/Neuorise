@@ -1164,6 +1164,8 @@ def handle_api(environ, start_response, path, method):
         if path == "/api/signup" and method == "POST":
             payload = read_json(environ)
             validate_captcha(environ, payload)
+            if not payload.get("acceptedTerms"):
+                raise ValueError("You must agree to the Privacy Policy and Terms of Service to continue.")
             name = (payload.get("name") or "").strip()
             email = (payload.get("email") or "").strip().lower()
             password = payload.get("password") or ""
@@ -1191,6 +1193,8 @@ def handle_api(environ, start_response, path, method):
         if path == "/api/login" and method == "POST":
             payload = read_json(environ)
             validate_captcha(environ, payload)
+            if not payload.get("acceptedTerms"):
+                raise ValueError("You must agree to the Privacy Policy and Terms of Service to continue.")
             email = (payload.get("email") or "").strip().lower()
             password = payload.get("password") or ""
             with db() as connection:

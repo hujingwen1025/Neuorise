@@ -416,6 +416,19 @@ label {
   font-weight: 700;
 }
 
+label.checkbox-field {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 16px 0;
+}
+
+label.checkbox-field input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 input,
 select,
 textarea {
@@ -975,7 +988,8 @@ dialog::backdrop {
 }
 
 .footer-section {
-  min-width: min(220px, 100%);
+  flex: 1 1 200px;
+  min-width: 160px;
 }
 
 .footer-brand {
@@ -997,6 +1011,7 @@ dialog::backdrop {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 20px;
+  justify-content: flex-start;
 }
 
 .footer-nav a {

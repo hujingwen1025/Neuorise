@@ -118,6 +118,11 @@ function setupAuthDialog() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const mode = dialog.dataset.mode || "login";
+    const agreement = form.elements.acceptedTerms;
+    if (!agreement?.checked) {
+      setMessage("#authMessage", "You must agree to the Privacy Policy and Terms of Service.", "error");
+      return;
+    }
     const formData = Object.fromEntries(new FormData(form).entries());
     setMessage("#authMessage", "Checking your account...", "neutral");
 
